@@ -165,7 +165,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
         role={clickable ? "button" : undefined}
         tabIndex={clickable ? 0 : undefined}
         onClick={clickAction}
-        onKeyDown={clickable ? (e) => e.key === "Enter" && clickAction(e as any) : undefined}
+        onKeyDown={clickable ? (e) => e.key === "Enter" && clickAction() : undefined}
         className={`border rounded px-2 py-2 text-xs flex items-start gap-2 ${styles[status.state]} ${hoverClass}`}
         title={hint ?? message}
         aria-label={hint}
@@ -185,7 +185,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
       role={clickable ? "button" : undefined}
       tabIndex={clickable ? 0 : undefined}
       onClick={clickAction}
-      onKeyDown={clickable ? (e) => e.key === "Enter" && clickAction(e as any) : undefined}
+      onKeyDown={clickable ? (e) => e.key === "Enter" && clickAction() : undefined}
       className={`border rounded px-3 py-2 text-sm flex items-center gap-2 ${styles[status.state]} ${hoverClass}`}
       title={hint}
       aria-label={hint}
