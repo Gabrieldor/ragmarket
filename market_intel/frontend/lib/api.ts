@@ -466,6 +466,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  rotateIp: () =>
+    apiFetch<{ message: string }>("/admin/rotate-ip", { method: "POST" }),
+
   listNotificationEvents: (params: Record<string, string | number | undefined> = {}) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {

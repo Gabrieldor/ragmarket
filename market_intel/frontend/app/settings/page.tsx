@@ -19,6 +19,10 @@ export default function SettingsPage() {
   const [outlierSaved, setOutlierSaved] = useState(false);
   const [outlierError, setOutlierError] = useState<string | null>(null);
 
+  const [rotatingIp, setRotatingIp] = useState(false);
+  const [rotateMsg, setRotateMsg] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+
   const [aliases, setAliases] = useState<MapAlias[]>([]);
   const [canonicalName, setCanonicalName] = useState("");
   const [rawNames, setRawNames] = useState("");
@@ -307,6 +311,39 @@ export default function SettingsPage() {
           </table>
         </div>
         {aliases.length === 0 && <p className="text-muted-foreground text-sm mt-2">No map aliases yet.</p>}
+      </section>
+
+      <section className="max-w-lg">
+        <h2 className="text-sm font-semibold text-foreground mb-2">Server</h2>
+        <p className="text-muted-foreground text-sm mb-3">
+          Rotate the server&apos;s public IP to clear a rate-limit block. The instance will
+          stop and restart automatically — the new IP will be sent to your Discord channel.
+          Expect ~2 minutes of downtime.
+        </p>
+        <div className="border border-border rounded p-4 space-y-3">
+          <button
+            disabled={rotatingIp}
+            onClick={async () => {
+              if (!confirm("Stop and restart the AWS instance to get a new IP? The dashboard will be unreachable for ~2 minutes.")) return;
+              setRotatingIp(true);
+              setRotateMsg(null);
+              setRotateError(null);
+              try {
+                const res = await api.rotateIp();
+                setRotateMsg(res.message);
+              } catch (err) {
+                setRotateError(String(err));
+              } finally {
+                setRotatingIp(false);
+              }
+            }}
+            className="bg-destructive text-white text-sm px-4 py-1.5 rounded disabled:opacity-50"
+          >
+            {rotatingIp ? "Stopping instance…" : "Rotate IP"}
+          </button>
+          {rotateMsg && <p className="text-sm text-muted-foreground">{rotateMsg}</p>}
+          {rotateError && <p className="text-sm text-destructive">{rotateError}</p>}
+        </div>
       </section>
     </div>
   );

@@ -7,6 +7,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from api.routers import (  # noqa: E402
+    admin,
     analytics,
     items,
     map_aliases,
@@ -27,6 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router)
 app.include_router(items.router)
 app.include_router(observations.router)
 app.include_router(analytics.router)

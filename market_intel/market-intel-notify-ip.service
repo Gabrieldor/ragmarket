@@ -1,0 +1,15 @@
+[Unit]
+Description=Notify Discord of new public IP on boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/home/ubuntu/Rag/.venv/bin/python /home/ubuntu/Rag/market_intel/notify_ip.py
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
