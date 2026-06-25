@@ -58,6 +58,17 @@ export default function MySalesPage() {
     }
   }
 
+  async function handleMarkShopRemoved(id: number) {
+    if (!confirm("Mark as 'shop removed'? This will correct the sold quantity and allow the next relist within 24h to be treated as the same sale.")) return;
+    try {
+      await api.markShopRemoved(id);
+      refreshSessions();
+      refreshSummary();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   useEffect(() => {
     refreshAliases();
     refreshSummary();
@@ -103,10 +114,11 @@ export default function MySalesPage() {
     }
   }
 
-  const statusVariants: Record<string, "info" | "success" | "neutral"> = {
+  const statusVariants: Record<string, "info" | "success" | "neutral" | "danger"> = {
     active: "info",
     sold_out_early: "success",
     expired: "neutral",
+    shop_removed: "neutral",
   };
 
   return (
@@ -326,7 +338,7 @@ export default function MySalesPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 flex items-center gap-2">
                     {s.dismissed ? (
                       <button
                         onClick={() => handleRestore(s.id)}
@@ -335,12 +347,23 @@ export default function MySalesPage() {
                         Restore
                       </button>
                     ) : (
-                      <button
-                        onClick={() => handleDismiss(s.id)}
-                        className="text-muted-foreground hover:text-destructive text-xs"
-                      >
-                        Remove
-                      </button>
+                      <>
+                        {s.status === "sold_out_early" && (
+                          <button
+                            onClick={() => handleMarkShopRemoved(s.id)}
+                            className="text-muted-foreground hover:text-amber-600 text-xs whitespace-nowrap"
+                            title="Mark as manually removed shop (not a real sellout)"
+                          >
+                            Shop removed
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDismiss(s.id)}
+                          className="text-muted-foreground hover:text-destructive text-xs"
+                        >
+                          Remove
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>

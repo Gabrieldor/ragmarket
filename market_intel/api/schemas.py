@@ -281,6 +281,7 @@ class MyListingSessionOut(BaseModel):
     last_known_quantity: int
     total_quantity_sold: int
     status: str
+    ended_reason: str | None
     cost_per_unit: float | None
     revenue: float
     profit: float | None

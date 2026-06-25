@@ -23,6 +23,7 @@ from db.repository import (
     dismiss_my_listing_session,
     get_current_cost_basis,
     list_vendor_aliases,
+    mark_shop_removed,
     remove_vendor_alias,
     restore_my_listing_session,
     set_item_cost_basis,
@@ -90,6 +91,7 @@ def _to_session_out(row: MyListingSession, item_name: str) -> MyListingSessionOu
         last_known_quantity=row.last_known_quantity,
         total_quantity_sold=row.total_quantity_sold,
         status=row.status,
+        ended_reason=row.ended_reason,
         cost_per_unit=row.cost_per_unit,
         revenue=revenue,
         profit=profit,
@@ -141,6 +143,21 @@ def dismiss_session(session_id: int, db: Session = Depends(get_db)):
         db.commit()
     except ValueError:
         raise HTTPException(status_code=404, detail="My listing session not found")
+    item = db.get(TrackedItem, row.tracked_item_id)
+    return _to_session_out(row, item.item_name if item else "?")
+
+
+@router.post("/sessions/{session_id}/mark-shop-removed", response_model=MyListingSessionOut)
+def mark_session_shop_removed(session_id: int, db: Session = Depends(get_db)):
+    """Marks a session as manually closed by the user (shop pulled, not a real sellout).
+    Corrects the sold quantity and enables the 24h continuation window so the next relist
+    from the same seller is merged into this session rather than counted separately.
+    """
+    try:
+        row = mark_shop_removed(db, session_id)
+        db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     item = db.get(TrackedItem, row.tracked_item_id)
     return _to_session_out(row, item.item_name if item else "?")
 

@@ -187,7 +187,8 @@ export type MyListingSession = {
   initial_quantity: number;
   last_known_quantity: number;
   total_quantity_sold: number;
-  status: "active" | "expired" | "sold_out_early";
+  status: "active" | "expired" | "sold_out_early" | "shop_removed";
+  ended_reason: string | null;
   cost_per_unit: number | null;
   revenue: number;
   profit: number | null;
@@ -416,6 +417,8 @@ export const api = {
     apiFetch<MyListingSession>(`/my-sales/sessions/${id}`, { method: "DELETE" }),
   restoreMyListingSession: (id: number) =>
     apiFetch<MyListingSession>(`/my-sales/sessions/${id}/restore`, { method: "POST" }),
+  markShopRemoved: (id: number) =>
+    apiFetch<MyListingSession>(`/my-sales/sessions/${id}/mark-shop-removed`, { method: "POST" }),
   myStatusSummary: () => apiFetch<MyStatusBreakdown[]>("/my-sales/status-summary"),
   mySalesSummary: () => apiFetch<MySalesSummary>("/my-sales/summary"),
 

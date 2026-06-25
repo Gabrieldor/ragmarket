@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -500,11 +500,18 @@ def get_cost_basis_at(session: Session, tracked_item_id: int, at_time: datetime)
 
 # ── My listing sessions ("my sales" log, see MyListingSession/MySaleEvent) ─────
 
+_SHOP_REMOVED_CONTINUATION_HOURS = 24
+
+
 def sync_my_listing_sessions(session: Session, tracked_item_id: int) -> int:
     """Updates (or creates) MyListingSession rows for every listing seen under a
     registered vendor alias for this item, and records any newly-confirmed MySaleEvent
     chunks. Safe to call repeatedly -- closed sessions are skipped, and sale chunks are
     deduplicated by (session_id, occurred_at). Returns the count of newly-recorded chunks.
+
+    Continuation logic: if a new SSI appears from the same seller within
+    _SHOP_REMOVED_CONTINUATION_HOURS of a 'shop_removed' session, that session is
+    reused (SSI updated, sales added on top) so the two stints show as one entry.
     """
     aliases = {a.alias_name for a in list_vendor_aliases(session)}
     if not aliases:
@@ -533,24 +540,53 @@ def sync_my_listing_sessions(session: Session, tracked_item_id: int) -> int:
             continue  # already closed, or dismissed by the user -- never reopen/resurrect
 
         if session_row is None:
-            cost_row = get_cost_basis_at(session, tracked_item_id, result.window_start)
-            session_row = MyListingSession(
-                tracked_item_id=tracked_item_id,
-                ssi=result.ssi,
-                seller_name=result.seller_name,
-                shop_name=result.shop_name,
-                map_name=result.map_name,
-                price=result.price,
-                window_start=result.window_start,
-                window_end=result.window_end,
-                initial_quantity=result.initial_quantity,
-                last_known_quantity=result.last_known_quantity,
-                total_quantity_sold=result.total_quantity_sold,
-                status=result.status,
-                cost_per_unit=cost_row.cost_per_unit if cost_row else None,
-            )
-            session.add(session_row)
-            session.flush()
+            # Check if this is a continuation of a shop_removed session within the window.
+            continuation = session.scalars(
+                select(MyListingSession).where(
+                    MyListingSession.tracked_item_id == tracked_item_id,
+                    MyListingSession.seller_name == result.seller_name,
+                    MyListingSession.ended_reason == "shop_removed",
+                    MyListingSession.dismissed.is_(False),
+                    MyListingSession.window_end
+                    >= result.window_start - timedelta(hours=_SHOP_REMOVED_CONTINUATION_HOURS),
+                ).order_by(MyListingSession.window_end.desc())
+            ).first()
+
+            if continuation is not None:
+                # Reuse the old session: update SSI and extend with new sales.
+                del existing_sessions[continuation.ssi]
+                continuation.ssi = result.ssi
+                continuation.window_end = result.window_end
+                continuation.last_known_quantity = result.last_known_quantity
+                continuation.total_quantity_sold += result.total_quantity_sold
+                # If the new stint ends conclusively, clear shop_removed so it doesn't
+                # get re-continued again on the next cycle.
+                if result.status != "active":
+                    continuation.ended_reason = None
+                    continuation.status = result.status
+                else:
+                    continuation.status = "active"
+                session_row = continuation
+                existing_sessions[result.ssi] = session_row
+            else:
+                cost_row = get_cost_basis_at(session, tracked_item_id, result.window_start)
+                session_row = MyListingSession(
+                    tracked_item_id=tracked_item_id,
+                    ssi=result.ssi,
+                    seller_name=result.seller_name,
+                    shop_name=result.shop_name,
+                    map_name=result.map_name,
+                    price=result.price,
+                    window_start=result.window_start,
+                    window_end=result.window_end,
+                    initial_quantity=result.initial_quantity,
+                    last_known_quantity=result.last_known_quantity,
+                    total_quantity_sold=result.total_quantity_sold,
+                    status=result.status,
+                    cost_per_unit=cost_row.cost_per_unit if cost_row else None,
+                )
+                session.add(session_row)
+                session.flush()
         else:
             session_row.last_known_quantity = result.last_known_quantity
             session_row.total_quantity_sold = result.total_quantity_sold
@@ -591,6 +627,53 @@ def dismiss_my_listing_session(session: Session, session_id: int) -> MyListingSe
         raise ValueError(f"My listing session {session_id} not found")
     row.dismissed = True
     row.dismissed_at = datetime.now()
+    session.flush()
+    return row
+
+
+def mark_shop_removed(session: Session, session_id: int) -> MyListingSession:
+    """Marks a session as manually closed (user removed the shop, no sale occurred for the
+    remaining quantity). Corrects total_quantity_sold by subtracting the quantity that was
+    incorrectly attributed as sold when the listing disappeared, and cleans the corresponding
+    MySaleEvent chunk so the by-hour chart stays accurate.
+    """
+    row = session.get(MyListingSession, session_id)
+    if row is None:
+        raise ValueError(f"My listing session {session_id} not found")
+    if row.dismissed:
+        raise ValueError("Cannot mark a dismissed session")
+    if row.ended_reason == "shop_removed":
+        return row  # idempotent
+
+    if row.status == "sold_out_early" and row.last_known_quantity > 0:
+        # The sellout chunk was recorded as last_known_quantity at the last-seen timestamp.
+        # Find the MySaleEvent for this session that ends at/after that point and matches.
+        # It may be a standalone chunk or merged with a decrease on the same timestamp.
+        events = list(
+            session.scalars(
+                select(MySaleEvent)
+                .where(MySaleEvent.session_id == row.id)
+                .order_by(MySaleEvent.occurred_at.desc())
+            )
+        )
+        remaining = row.last_known_quantity
+        for evt in events:
+            if evt.quantity_sold <= remaining:
+                # This entire event was the sellout chunk -- remove it.
+                remaining -= evt.quantity_sold
+                session.delete(evt)
+                if remaining == 0:
+                    break
+            else:
+                # Decrease + sellout were merged into this event -- reduce it.
+                evt.quantity_sold -= remaining
+                remaining = 0
+                break
+
+        row.total_quantity_sold = max(0, row.total_quantity_sold - row.last_known_quantity)
+
+    row.ended_reason = "shop_removed"
+    row.status = "shop_removed"
     session.flush()
     return row
 

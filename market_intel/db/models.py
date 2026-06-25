@@ -360,7 +360,9 @@ class MyListingSession(Base):
     last_known_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     total_quantity_sold: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
-    # 'active' | 'expired' | 'sold_out_early'
+    # 'active' | 'expired' | 'sold_out_early' | 'shop_removed'
+    ended_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    # null = normal outcome; 'shop_removed' = user marked as manually closed (not a sale)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     # captured at window_start from ItemCostBasis -- nullable if no cost was set yet
     # Soft-delete: set when the user removes a bad entry from the My Sales page (e.g. a
