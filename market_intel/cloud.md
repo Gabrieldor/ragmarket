@@ -52,8 +52,29 @@ no longer depends on Windows Task Scheduler.
   Always Free resources available — skip account creation in Phase 1.
 - **Open question #6 resolved (2026-06-24)**: **plain IP for now** (`http://<public-ip>:3000`/
   `:8000`) — Phase 6 (domain + HTTPS) is deferred, not in scope for this pass.
-- **Not yet decided / not yet done**: open questions #2 (region), #3 (API credentials), #7
-  (Discord vs. local sound) — and everything in the checklist below.
+- **Open question #2 resolved (2026-06-24)**: **no region preference** — try whichever Always
+  Free region/availability-domain combo actually has Ampere A1 capacity, in order, rather than
+  targeting one specific region first.
+- **Open question #3 resolved (2026-06-24)**: API signing key pair generated locally via
+  `openssl` (not the OCI CLI, which isn't installed) and uploaded through the OCI console's
+  "Add API Key" dialog. **Gotcha hit**: the console rejected the first upload as "invalid public
+  key" — cause was CRLF line endings from Git Bash on Windows; stripping `\r` (`tr -d '\r'`) fixed
+  it. Private key never left the user's machine (`C:\Users\Lonhu\.oci\oci_api_key.pem`).
+  `C:\Users\Lonhu\.oci\config` written with:
+  - tenancy OCID: `ocid1.tenancy.oc1..aaaaaaaaditdywmenzgieovnav3mh4y4cnfkah7e7xwwp5qquaypxinjrnsq`
+  - user OCID: `ocid1.user.oc1..aaaaaaaafg3hys2hwku5frvmxcn6qucgvocy5dgvdsv657a6tgmfl5aq46dq`
+  - fingerprint: `af:73:4e:85:92:3b:88:09:20:97:2b:bd:73:2f:b9:ac`
+  - region: `sa-vinhedo-1`
+  - key_file: `C:\Users\Lonhu\.oci\oci_api_key.pem`
+- **Always Free Ampere A1 confirmed available (2026-06-24)** in `sa-vinhedo-1` (the tenancy's home
+  region) — `VM.Standard.A1.Flex` shows as "Always Free-eligible" in the console's Create Instance
+  shape picker, under the Ampere filter (not shown in the default Intel/AMD shape list — had to
+  click "Change Shape" and look specifically). `VM.Standard.E2.1.Micro` (1 OCPU/1GB, AMD) is also
+  free-eligible but was ruled out as too small for this stack (Playwright/Chromium + API +
+  collector + Next.js frontend). Always Free Ampere allotment is up to 4 OCPU / 24GB total — plan
+  to size the single instance at the max (4 OCPU / 24GB) since it's free either way.
+- **Not yet decided / not yet done**: open question #7 (Discord vs. local sound) — and everything
+  in the checklist below. Ready to start Phase 2 (Terraform).
 
 ## Open questions to resolve with the user (ask early, in this order)
 
@@ -95,16 +116,29 @@ These block specific steps below — ask before attempting that step, don't gues
 
 ### Phase 0 — Local prep (can be done without any Oracle account)
 
-- [ ] Start Docker Desktop locally and run `docker compose build` (from `market_intel/`) to
+- [x] Start Docker Desktop locally and run `docker compose build` (from `market_intel/`) to
       confirm the existing `Dockerfile`/`frontend/Dockerfile` actually build end-to-end. Fix any
-      issues found (this was not yet verified as of 2026-06-24).
-- [ ] Resolve open question #4 (code delivery method). If git: `git init` at `D:\Rag` (repo root,
-      so both `src/` and `market_intel/` are in one repo — they're already coupled via the
-      editable-install relationship), add a `.gitignore` (`*.db`, `.venv/`, `node_modules/`,
-      `.next/`, `__pycache__/`, `logs/`, `*.db-wal`, `*.db-shm`), commit, create the remote, push.
-- [ ] Resolve open question #5 (data migration plan) — if migrating real data, decide now whether
-      to copy `market_intel.db` via `scp` after the VM exists, or bundle it some other way. (Just
-      a decision now; the actual copy happens in Phase 3.)
+      issues found.
+      **Completed 2026-06-25** — built one service at a time after capping WSL2 at 6GB
+      (`%UserProfile%\.wslconfig`). Two issues fixed along the way:
+      1. Missing `.dockerignore` at repo root (`D:\Rag\.dockerignore`) and in `frontend/`
+         (`market_intel/frontend/.dockerignore`) — without them the build context was 775MB–1.8GB
+         and crashed the Docker daemon with OOM. Added both; context is now ~200KB / ~8KB.
+      2. TypeScript error in `frontend/components/CollectorStatusBanner.tsx:62` — offline fallback
+         object was missing the `paused` field added by a recent schema change. Fixed inline.
+- [x] Resolve open question #4 (code delivery method) — **git repo**. Done 2026-06-24:
+      `git init` at `D:\Rag` (repo root, covers both `src/` and `market_intel/`), root
+      `.gitignore` added (`.venv/`, `__pycache__/`, `*.egg-info/`, `*.pyc`, `.env`, `config.json`,
+      `*.db`/`*.db-journal`/`*.db-wal`/`*.db-shm`, `node_modules/`, `.next/`, `build/`, `logs/`,
+      `*.log`, `.claude/`). **Note**: `config.json` (repo root) contains a live Discord bot token
+      and was excluded from git, not just from this initial commit — keep it out permanently,
+      don't commit it later either. Removed an accidental nested `.git` inside
+      `market_intel/frontend/` (leftover default `create-next-app` init, only had its own initial
+      commit, no risk) before staging so the frontend folds into the single root repo. Initial
+      commit created, remote added (`https://github.com/Gabrieldor/ragmarket.git`), pushed to
+      `master`.
+- [x] Resolve open question #5 (data migration plan) — **start fresh**, no migration of the local
+      `market_intel.db`. Decided 2026-06-24; nothing to do in Phase 3 for this.
 
 ### Phase 1 — Oracle Cloud account + credentials
 
@@ -130,10 +164,16 @@ These block specific steps below — ask before attempting that step, don't gues
 - [ ] `terraform init` / `terraform plan` — review the plan with the user before `apply` (this is
       a real provisioning action, even if free-tier; confirm before applying, per this project's
       "confirm before actions with external/billing effects" norm).
-- [ ] `terraform apply`. **If "out of host capacity" errors occur**: this is a known Oracle
-      Always-Free limitation, not a config bug — retry, try a different availability domain, or
-      escalate to the Hetzner fallback (re-quote current Hetzner pricing if it's been a while
-      since the original comparison, prices drift).
+- [x] `terraform apply` — **attempted 2026-06-24, hit "Out of host capacity" on
+      `oci_core_instance.market_intel` in `sa-vinhedo-1`**, twice in a row. Networking layer
+      (VCN, IGW, route table, security list, subnet) created successfully and is sitting in
+      Terraform state ready to go — only the Ampere A1.Flex instance itself failed to launch.
+      `sa-vinhedo-1` has only **one availability domain** (`uMQA:SA-VINHEDO-1-AD-1`), confirmed via
+      `data.oci_identity_availability_domains` — so "try a different AD" isn't an option in this
+      region; only retrying over time, or the Hetzner fallback, are left. Terraform config lives
+      at `D:\Rag\infra\oracle\` (`terraform.tfvars` has the tenancy OCID, gitignored). To retry:
+      `cd D:\Rag\infra\oracle && terraform apply -auto-approve` (existing resources are unaffected,
+      only the instance create will be attempted).
 - [ ] Note the instance's public IP here once provisioned: `<TBD>`.
 
 ### Phase 3 — Server setup

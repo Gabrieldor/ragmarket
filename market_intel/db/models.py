@@ -122,6 +122,7 @@ class ListingObservation(Base):
 
     page_num: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rank_on_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_outlier: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     tracked_item: Mapped["TrackedItem"] = relationship(back_populates="observations")
     scrape_run: Mapped["ScrapeRun"] = relationship(back_populates="observations")
@@ -211,6 +212,8 @@ class CollectorStatus(Base):
     current_item_name: Mapped[str | None] = mapped_column(String, nullable=True)
     next_cycle_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     consecutive_rate_limits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    retry_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
     )
@@ -230,6 +233,20 @@ class SoldOutConfig(Base):
     # Supports overnight wraparound (e.g. start="23:00", end="06:00").
     quiet_hours_start: Mapped[str | None] = mapped_column(String, nullable=True, default="00:00")
     quiet_hours_end: Mapped[str | None] = mapped_column(String, nullable=True, default="06:00")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
+class ScraperConfig(Base):
+    """Single-row table holding scraper-level behavior settings editable live from
+    the dashboard without an app restart.
+    """
+
+    __tablename__ = "scraper_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    outlier_factor: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
     )
@@ -281,6 +298,7 @@ class SaleEvent(Base):
     seller_name: Mapped[str | None] = mapped_column(String, nullable=True)
     map_name: Mapped[str | None] = mapped_column(String, nullable=True)
     quantity_sold: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sale_attributed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     method: Mapped[str] = mapped_column(String, nullable=False)
     # 'decrease' | 'sellout_no_relist' | 'sellout_partial_relist'

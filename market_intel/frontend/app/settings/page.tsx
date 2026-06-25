@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, MapAlias, SoldOutConfig } from "@/lib/api";
+import { api, MapAlias, ScraperConfig, SoldOutConfig } from "@/lib/api";
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<SoldOutConfig | null>(null);
@@ -12,6 +12,12 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  const [scraperConfig, setScraperConfig] = useState<ScraperConfig | null>(null);
+  const [outlierFactor, setOutlierFactor] = useState("5");
+  const [outlierSaving, setOutlierSaving] = useState(false);
+  const [outlierSaved, setOutlierSaved] = useState(false);
+  const [outlierError, setOutlierError] = useState<string | null>(null);
 
   const [aliases, setAliases] = useState<MapAlias[]>([]);
   const [canonicalName, setCanonicalName] = useState("");
@@ -34,8 +40,32 @@ export default function SettingsPage() {
         if (c.quiet_hours_end) setQuietEnd(c.quiet_hours_end);
       })
       .catch((err) => setError(String(err)));
+    api.getScraperConfig()
+      .then((c) => {
+        setScraperConfig(c);
+        setOutlierFactor(String(c.outlier_factor));
+      })
+      .catch((err) => setOutlierError(String(err)));
     refreshAliases();
   }, []);
+
+  async function handleOutlierSave(e: React.FormEvent) {
+    e.preventDefault();
+    const factor = Number(outlierFactor);
+    if (!factor || factor < 1.1) return;
+    setOutlierSaving(true);
+    setOutlierError(null);
+    setOutlierSaved(false);
+    try {
+      const updated = await api.updateScraperConfig({ outlier_factor: factor });
+      setScraperConfig(updated);
+      setOutlierSaved(true);
+    } catch (err) {
+      setOutlierError(String(err));
+    } finally {
+      setOutlierSaving(false);
+    }
+  }
 
   async function handleAddAlias(e: React.FormEvent) {
     e.preventDefault();
@@ -169,6 +199,41 @@ export default function SettingsPage() {
         {saved && <span className="text-green-700 text-sm ml-3">Saved.</span>}
         </form>
         {error && <p className="text-destructive text-sm mt-2">{error}</p>}
+      </section>
+
+      <section className="max-w-lg">
+        <h2 className="text-sm font-semibold text-foreground mb-2">Outlier detection</h2>
+        <p className="text-muted-foreground text-sm mb-3">
+          Listings priced above this multiple of the cycle&apos;s median are stored as outliers
+          and excluded from all price stats. Saving re-flags all existing observations immediately.
+        </p>
+        <form onSubmit={handleOutlierSave} className="space-y-4 border border-border rounded p-4">
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Outlier threshold (× median)</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1.1}
+                step={0.5}
+                value={outlierFactor}
+                onChange={(e) => setOutlierFactor(e.target.value)}
+                className="border border-border rounded px-3 py-1.5 text-sm w-24"
+              />
+              <span className="text-sm text-muted-foreground">
+                × median {outlierFactor ? `— e.g. if median is 19,500 then prices above ${(Number(outlierFactor) * 19500).toLocaleString("pt-BR")} get flagged` : ""}
+              </span>
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={outlierSaving || !scraperConfig}
+            className="bg-primary text-white text-sm px-4 py-1.5 rounded disabled:opacity-50"
+          >
+            {outlierSaving ? "Saving..." : "Save"}
+          </button>
+          {outlierSaved && <span className="text-green-700 text-sm ml-3">Saved — existing data re-flagged.</span>}
+          {outlierError && <p className="text-destructive text-sm mt-1">{outlierError}</p>}
+        </form>
       </section>
 
       <section className="max-w-2xl">

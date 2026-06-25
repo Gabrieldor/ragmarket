@@ -16,6 +16,7 @@ scraped so far that cycle.
 import asyncio
 import logging
 import signal
+import statistics
 import sys
 import time
 from datetime import datetime, timedelta
@@ -29,7 +30,9 @@ from db.models import ListingObservation, NotificationSettings, ScrapeRun, ShopL
 from db.repository import (  # noqa: E402
     finish_scrape_run,
     get_cached_shop_location,
+    get_collector_status,
     get_notification_settings,
+    get_scraper_config,
     infer_and_persist_sales,
     infer_and_persist_sold_out,
     insert_observations,
@@ -39,6 +42,8 @@ from db.repository import (  # noqa: E402
     sync_my_listing_sessions,
     upsert_shop_location,
 )
+from db.models import CollectorStatus as CollectorStatusModel  # noqa: E402
+from collector.rollup_jobs import run_rollup_for_date  # noqa: E402
 from db.session import get_session  # noqa: E402
 from notifications.checker import check_watch_rules  # noqa: E402
 from notifications.discord_notifier import DiscordNotifier  # noqa: E402
@@ -51,6 +56,28 @@ logger = logging.getLogger(__name__)
 
 RATE_LIMIT_BACKOFF_MULTIPLIER = 3  # base backoff multiplier on the first consecutive 429
 MAX_RATE_LIMIT_BACKOFF_SECONDS = 4 * 3600  # cap: don't wait longer than this between retries
+_RETRY_POLL_INTERVAL = 3.0  # how often to check retry_requested during a backoff sleep
+
+
+async def _interruptible_sleep(seconds: float, stop_event: asyncio.Event) -> bool:
+    """Sleep for up to `seconds`, waking early if stop_event fires or retry_requested is set.
+    Returns True if a retry was requested (caller should reset consecutive_rate_limits),
+    False if the full sleep elapsed or the stop_event fired.
+    """
+    deadline = time.monotonic() + seconds
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(_RETRY_POLL_INTERVAL, remaining))
+        with get_session() as session:
+            status = get_collector_status(session)
+            if status and status.retry_requested:
+                status.retry_requested = False
+                session.commit()
+                logger.info("Retry requested by user -- abandoning backoff sleep.")
+                return True
+    return False
 
 
 async def _scrape_one_item(
@@ -131,6 +158,14 @@ async def _scrape_one_item(
                     rank_on_page=rank,
                 )
             )
+
+        # Flag outliers using the live-configurable factor (default 5×).
+        if len(observations) >= 2:
+            factor = get_scraper_config(session).outlier_factor
+            median_price = statistics.median(o.price for o in observations)
+            threshold = factor * median_price
+            for obs in observations:
+                obs.is_outlier = obs.price > threshold
 
         insert_observations(session, observations)
         # Confirms and persists any sale events that have cleared their grace window since
@@ -321,10 +356,8 @@ async def main() -> None:
                 next_cycle_at=datetime.now() + timedelta(seconds=resume_wait),
                 consecutive_rate_limits=consecutive_rate_limits,
             )
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=resume_wait)
-        except asyncio.TimeoutError:
-            pass
+        await _interruptible_sleep(resume_wait, stop_event)
+        consecutive_rate_limits = 0  # user may have clicked retry; start fresh
 
     async def new_provider() -> DetailedListingProvider:
         p = DetailedListingProvider(
@@ -345,6 +378,25 @@ async def main() -> None:
 
     try:
         while not stop_event.is_set():
+            # Pause gate: if the dashboard requested a pause, hold here until resumed or stopped.
+            with get_session() as session:
+                status_row = get_collector_status(session)
+                is_paused = status_row.paused if status_row else False
+            if is_paused:
+                with get_session() as session:
+                    set_collector_status(session, state="paused")
+                    session.commit()
+                logger.info("Collector paused -- waiting for resume.")
+                while not stop_event.is_set():
+                    await asyncio.sleep(3)
+                    with get_session() as session:
+                        status_row = get_collector_status(session)
+                        if not (status_row and status_row.paused):
+                            break
+                logger.info("Collector resumed.")
+                if stop_event.is_set():
+                    break
+
             # The browser process can die out-of-band (OOM, an external kill, a crash) without
             # the collector's own process dying -- since the browser instance is reused across
             # cycles for efficiency, an undetected death would otherwise fail every single
@@ -355,7 +407,12 @@ async def main() -> None:
                     await provider.teardown()
                 except Exception:
                     pass
-                provider = await new_provider()
+                try:
+                    provider = await new_provider()
+                except Exception:
+                    logger.exception("Browser relaunch failed -- retrying in 60s.")
+                    await asyncio.sleep(60)
+                    continue
 
             with get_session() as session:
                 notif_config = get_notification_settings(session)
@@ -403,6 +460,13 @@ async def main() -> None:
                 )
             else:
                 consecutive_rate_limits = 0
+                with get_session() as session:
+                    try:
+                        run_rollup_for_date(session, datetime.now().date())
+                        session.commit()
+                        logger.info("Rollup complete for today.")
+                    except Exception:
+                        logger.exception("Rollup failed -- stats may be stale until next cycle.")
             sleep_for = max(0.0, target_interval - elapsed)
             logger.info(
                 "Cycle took %.1fs; sleeping %.1fs before next cycle (target interval %ds%s).",
@@ -417,10 +481,9 @@ async def main() -> None:
                     next_cycle_at=datetime.now() + timedelta(seconds=sleep_for),
                     consecutive_rate_limits=consecutive_rate_limits,
                 )
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=sleep_for)
-            except asyncio.TimeoutError:
-                pass
+            retry = await _interruptible_sleep(sleep_for, stop_event)
+            if retry:
+                consecutive_rate_limits = 0
     except KeyboardInterrupt:
         logger.info("Collector stopped (KeyboardInterrupt).")
     finally:

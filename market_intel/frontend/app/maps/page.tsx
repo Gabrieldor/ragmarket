@@ -277,6 +277,7 @@ export default function MapAnalysisPage() {
               <SortableHeader label="Listings" sortKey="listing_count" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <SortableHeader label="Qty" sortKey="total_quantity" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <SortableHeader label="Est. units sold" sortKey="estimated_units_sold" current={sortKey} dir={sortDir} onClick={toggleSort} />
+              <th className="px-3 py-2">Avg sale price</th>
               <th className="px-3 py-2">Period</th>
               <th className="px-3 py-2"></th>
             </tr>
@@ -293,6 +294,9 @@ export default function MapAnalysisPage() {
                   <td className="px-3 py-2">{m.listing_count}</td>
                   <td className="px-3 py-2">{m.total_quantity}</td>
                   <td className="px-3 py-2">{m.estimated_units_sold}</td>
+                  <td className="px-3 py-2">
+                    {m.avg_sale_price != null ? Math.round(m.avg_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {m.period_start} → {m.period_end}
                   </td>

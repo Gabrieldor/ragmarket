@@ -1,9 +1,8 @@
-"""Combined nightly entry point: rollup, then retention.
+"""Nightly retention job -- archiving and pruning old raw observations.
 
-Intended to be invoked once a day by an external scheduler (cron on
-Linux/macOS, Task Scheduler on Windows) -- this project does not run its own
-scheduler process. Run after the day's collection is done, off-peak relative
-to the collector's write activity, e.g.:
+Rollup (hourly/daily/map stats) now runs automatically after every scrape cycle
+inside the collector, so it no longer belongs here. This script only handles
+retention and should be scheduled once a day, off-peak.
 
     Windows Task Scheduler: daily trigger -> action:
         "<path to .venv>\\Scripts\\python.exe" "<path>\\collector\\scheduled_jobs.py"
@@ -17,15 +16,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from collector import retention, rollup_jobs  # noqa: E402
+from collector import retention  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    logger.info("Starting nightly rollup...")
-    rollup_jobs.main()
     logger.info("Starting retention (archive + prune)...")
     result = retention.archive_and_prune()
     logger.info("Retention result: %s", result)

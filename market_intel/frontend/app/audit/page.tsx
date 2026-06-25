@@ -187,6 +187,7 @@ export default function AuditPage() {
                                   <th className="px-2 py-1">Seller</th>
                                   <th className="px-2 py-1">Map</th>
                                   <th className="px-2 py-1">Qty sold</th>
+                                  <th className="px-2 py-1">Price</th>
                                   <th className="px-2 py-1">Relisted as</th>
                                 </tr>
                               </thead>
@@ -199,6 +200,9 @@ export default function AuditPage() {
                                     <td className="px-2 py-1">{e.seller_name}</td>
                                     <td className="px-2 py-1">{e.map_name}</td>
                                     <td className="px-2 py-1 font-medium">{e.quantity_sold}</td>
+                                    <td className="px-2 py-1">
+                                      {e.price != null ? e.price.toLocaleString() : <span className="text-muted-foreground">—</span>}
+                                    </td>
                                     <td className="px-2 py-1 text-muted-foreground">
                                       {e.relisted_ssi ? `qty ${e.relisted_quantity}` : "—"}
                                     </td>

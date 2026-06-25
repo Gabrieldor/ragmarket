@@ -33,6 +33,7 @@ def _fetch_day_observations(session: Session, target_date: date) -> list[Listing
     stmt = select(ListingObservation).where(
         ListingObservation.observed_at >= start,
         ListingObservation.observed_at < end,
+        ListingObservation.is_outlier.is_(False),
     )
     return list(session.scalars(stmt))
 

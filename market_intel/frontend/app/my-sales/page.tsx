@@ -198,10 +198,10 @@ export default function MySalesPage() {
         <h2 className="text-sm font-semibold text-foreground mb-2">Summary</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <StatCard title="Total quantity sold" value={summary ? String(summary.total_quantity_sold) : "—"} />
-          <StatCard title="Total revenue" value={summary ? Math.round(summary.total_revenue).toString() : "—"} />
+          <StatCard title="Total revenue" value={summary ? Math.round(summary.total_revenue).toLocaleString() : "—"} />
           <StatCard
             title="Total profit"
-            value={summary?.total_profit != null ? Math.round(summary.total_profit).toString() : "—"}
+            value={summary?.total_profit != null ? Math.round(summary.total_profit).toLocaleString() : "—"}
           />
         </div>
 
@@ -223,8 +223,8 @@ export default function MySalesPage() {
                     <tr key={row.tracked_item_id} className="border-t border-border hover:bg-muted/50">
                       <td className="px-3 py-2 font-medium">{row.item_name}</td>
                       <td className="px-3 py-2">{row.quantity_sold}</td>
-                      <td className="px-3 py-2">{Math.round(row.revenue)}</td>
-                      <td className="px-3 py-2">{row.profit != null ? Math.round(row.profit) : "—"}</td>
+                      <td className="px-3 py-2">{Math.round(row.revenue).toLocaleString()}</td>
+                      <td className="px-3 py-2">{row.profit != null ? Math.round(row.profit).toLocaleString() : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -248,7 +248,7 @@ export default function MySalesPage() {
                     <tr key={row.map_name} className="border-t border-border hover:bg-muted/50">
                       <td className="px-3 py-2 font-medium">{row.map_name}</td>
                       <td className="px-3 py-2">{row.quantity_sold}</td>
-                      <td className="px-3 py-2">{Math.round(row.revenue)}</td>
+                      <td className="px-3 py-2">{Math.round(row.revenue).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -316,8 +316,8 @@ export default function MySalesPage() {
                   <td className="px-3 py-2">{s.map_name}</td>
                   <td className="px-3 py-2 text-muted-foreground">{s.window_start.replace("T", " ")}</td>
                   <td className="px-3 py-2">{s.total_quantity_sold} / {s.initial_quantity}</td>
-                  <td className="px-3 py-2">{Math.round(s.revenue)}</td>
-                  <td className="px-3 py-2">{s.profit != null ? Math.round(s.profit) : "—"}</td>
+                  <td className="px-3 py-2">{Math.round(s.revenue).toLocaleString()}</td>
+                  <td className="px-3 py-2">{s.profit != null ? Math.round(s.profit).toLocaleString() : "—"}</td>
                   <td className="px-3 py-2">
                     <Badge variant={statusVariants[s.status] || "neutral"}>{s.status.replace("_", " ")}</Badge>
                     {s.dismissed && (

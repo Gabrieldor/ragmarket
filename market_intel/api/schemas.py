@@ -109,6 +109,7 @@ class MapStatOut(BaseModel):
     # minimum-bound estimate: very recent disappearances within the grace window are left
     # out (pending) rather than guessed at. See analytics.py:_compute_sold_deltas.
     estimated_units_sold: int
+    avg_sale_price: float | None  # quantity-weighted avg price across inferred sale events; null if no sales
 
 
 class HourOfDayStatOut(BaseModel):
@@ -130,6 +131,7 @@ class SalesByHourOut(BaseModel):
     hour: int
     estimated_units_sold: int
     sale_events: int
+    avg_sale_price: float | None  # quantity-weighted avg price; null if no priced sale events
 
 
 class SalesByHourMapOut(BaseModel):
@@ -216,10 +218,11 @@ class TrendOut(BaseModel):
 class CollectorStatusOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    state: str  # 'starting' | 'scraping' | 'sleeping' | 'rate_limited' | 'offline'
+    state: str  # 'starting' | 'scraping' | 'sleeping' | 'rate_limited' | 'offline' | 'paused'
     current_item_name: str | None
     next_cycle_at: datetime | None
     consecutive_rate_limits: int
+    paused: bool
     updated_at: datetime | None
 
 
@@ -324,6 +327,7 @@ class SaleEventOut(BaseModel):
     seller_name: str | None
     map_name: str | None
     quantity_sold: int
+    price: int | None
     sale_attributed_at: datetime
     method: str  # 'decrease' | 'sellout_no_relist' | 'sellout_partial_relist'
     relisted_ssi: str | None
@@ -397,6 +401,31 @@ class SoldOutSummaryOut(BaseModel):
 
     tracked_item_id: int
     active_count: int
+
+
+class ScraperConfigOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    outlier_factor: float
+    updated_at: datetime
+
+
+class ScraperConfigUpdate(BaseModel):
+    outlier_factor: float
+
+
+class OutlierObservationOut(BaseModel):
+    id: int
+    tracked_item_id: int
+    item_name: str
+    observed_at: datetime
+    price: int
+    quantity: int
+    seller_name: str | None
+    shop_name: str | None
+    map_name: str | None
+    cycle_median_price: int
+    price_multiple: float
 
 
 class WatchRuleOut(BaseModel):

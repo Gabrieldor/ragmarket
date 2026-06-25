@@ -73,12 +73,14 @@ export type MapStat = {
   total_quantity: number;
   stddev_price: number;
   estimated_units_sold: number;
+  avg_sale_price: number | null;
 };
 
 export type SalesByHour = {
   hour: number;
   estimated_units_sold: number;
   sale_events: number;
+  avg_sale_price: number | null;
 };
 
 export type SalesByHourMap = {
@@ -127,11 +129,31 @@ export type CurrentSnapshot = {
 };
 
 export type CollectorStatus = {
-  state: "starting" | "scraping" | "sleeping" | "rate_limited" | "offline";
+  state: "starting" | "scraping" | "sleeping" | "rate_limited" | "offline" | "paused";
   current_item_name: string | null;
   next_cycle_at: string | null;
   consecutive_rate_limits: number;
+  paused: boolean;
   updated_at: string | null;
+};
+
+export type ScraperConfig = {
+  outlier_factor: number;
+  updated_at: string;
+};
+
+export type OutlierObservation = {
+  id: number;
+  tracked_item_id: number;
+  item_name: string;
+  observed_at: string;
+  price: number;
+  quantity: number;
+  seller_name: string | null;
+  shop_name: string | null;
+  map_name: string | null;
+  cycle_median_price: number;
+  price_multiple: number;
 };
 
 export type VendorAlias = {
@@ -176,6 +198,7 @@ export type SaleEvent = {
   seller_name: string | null;
   map_name: string | null;
   quantity_sold: number;
+  price: number | null;
   sale_attributed_at: string;
   method: "decrease" | "sellout_no_relist" | "sellout_partial_relist";
   relisted_ssi: string | null;
@@ -347,7 +370,24 @@ export const api = {
     return apiFetch<SaleMethodBreakdown[]>(`/analytics/${itemId}/sale-method-breakdown?${qs.toString()}`);
   },
 
+  getScraperConfig: () => apiFetch<ScraperConfig>("/scraper-config"),
+  updateScraperConfig: (body: { outlier_factor: number }) =>
+    apiFetch<ScraperConfig>("/scraper-config", { method: "PATCH", body: JSON.stringify(body) }),
+
   collectorStatus: () => apiFetch<CollectorStatus>("/collector/status"),
+  listOutliers: (params?: { item_id?: number; start?: string; end?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.item_id != null) qs.set("item_id", String(params.item_id));
+    if (params?.start) qs.set("start", params.start);
+    if (params?.end) qs.set("end", params.end);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return apiFetch<OutlierObservation[]>(`/analytics/outliers${q ? `?${q}` : ""}`);
+  },
+  pauseCollector: () => apiFetch<CollectorStatus>("/collector/pause", { method: "POST" }),
+  resumeCollector: () => apiFetch<CollectorStatus>("/collector/resume", { method: "POST" }),
+  retryCollector: () => apiFetch<CollectorStatus>("/collector/retry", { method: "POST" }),
 
   listVendorAliases: () => apiFetch<VendorAlias[]>("/my-sales/aliases"),
   addVendorAlias: (alias_name: string) =>

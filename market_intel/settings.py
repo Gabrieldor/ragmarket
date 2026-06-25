@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Throttling, mirrors the original scraper's rule_delay -- inserted between each item's
     # scrape (item_delay_seconds) and between each location-modal click within an item
     # (location_click_delay_seconds), to avoid hammering the site and triggering HTTP 429s.
-    item_delay_seconds: float = 8.0
+    item_delay_seconds: float = 15.0
     location_click_delay_seconds: float = 2.5
 
     # How long a vending listing stays up in-game before it's expected to expire on its

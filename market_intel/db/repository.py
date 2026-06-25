@@ -22,6 +22,7 @@ from db.models import (
     ScrapeRun,
     ShopLocation,
     SoldOutConfig,
+    ScraperConfig,
     SoldOutEvent,
     TrackedItem,
     VendorAlias,
@@ -182,6 +183,26 @@ def get_collector_status(session: Session) -> CollectorStatus | None:
     return session.get(CollectorStatus, 1)
 
 
+def set_collector_retry(session: Session) -> CollectorStatus:
+    status = session.get(CollectorStatus, 1)
+    if status is None:
+        status = CollectorStatus(id=1)
+        session.add(status)
+    status.retry_requested = True
+    session.flush()
+    return status
+
+
+def set_collector_paused(session: Session, paused: bool) -> CollectorStatus:
+    status = session.get(CollectorStatus, 1)
+    if status is None:
+        status = CollectorStatus(id=1)
+        session.add(status)
+    status.paused = paused
+    session.flush()
+    return status
+
+
 def set_collector_status(
     session: Session,
     *,
@@ -231,6 +252,7 @@ def record_sale_events(session: Session, tracked_item_id: int, events: list[Infe
             seller_name=event.seller_name,
             map_name=event.map_name,
             quantity_sold=event.quantity_sold,
+            price=event.price,
             sale_attributed_at=event.sale_attributed_at,
             method=event.method,
             relisted_ssi=event.relisted_ssi,
@@ -259,6 +281,15 @@ def infer_and_persist_sales(session: Session, tracked_item_id: int) -> int:
 
 
 # ── Low-stock ("sold out") detection -- see sold_out_inference.py ─────────────
+
+def get_scraper_config(session: Session) -> ScraperConfig:
+    config = session.get(ScraperConfig, 1)
+    if config is None:
+        config = ScraperConfig(id=1, updated_at=datetime.now())
+        session.add(config)
+        session.flush()
+    return config
+
 
 def get_sold_out_config(session: Session) -> SoldOutConfig:
     """Get-or-create the single global config row (id=1), mirrors set_collector_status's

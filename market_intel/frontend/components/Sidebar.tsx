@@ -15,6 +15,7 @@ import {
   ListIcon,
   MagnifyingGlassIcon,
   MapTrifoldIcon,
+  WarningOctagonIcon,
   XIcon,
   type Icon,
 } from "@phosphor-icons/react";
@@ -40,6 +41,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/maps", label: "Map Analysis", icon: MapTrifoldIcon },
       { href: "/listing-history", label: "Listing History", icon: ClockCounterClockwiseIcon },
       { href: "/explorer", label: "Raw Data Explorer", icon: MagnifyingGlassIcon },
+      { href: "/outliers", label: "Outliers", icon: WarningOctagonIcon },
     ],
   },
   {

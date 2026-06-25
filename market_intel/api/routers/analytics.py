@@ -11,6 +11,7 @@ from api.schemas import (
     HourOfDayStatOut,
     ListingHistoryOut,
     MapStatOut,
+    OutlierObservationOut,
     SaleEventOut,
     SaleMethodBreakdownOut,
     SalesByHourMapOut,
@@ -20,7 +21,7 @@ from api.schemas import (
     WeekdayStatOut,
     WeekendComparisonOut,
 )
-from db.models import DailyStat, HourlyStat, ListingObservation, MapStat, SaleEvent
+from db.models import DailyStat, HourlyStat, ListingObservation, MapStat, SaleEvent, TrackedItem
 from db.repository import get_map_alias_lookup
 from db.session import get_db
 
@@ -57,7 +58,7 @@ def current_snapshot(item_id: int, db: Session = Depends(get_db)):
     """
     latest_observed_at = db.scalar(
         select(ListingObservation.observed_at)
-        .where(ListingObservation.tracked_item_id == item_id)
+        .where(ListingObservation.tracked_item_id == item_id, ListingObservation.is_outlier.is_(False))
         .order_by(ListingObservation.observed_at.desc())
         .limit(1)
     )
@@ -72,6 +73,7 @@ def current_snapshot(item_id: int, db: Session = Depends(get_db)):
             select(ListingObservation).where(
                 ListingObservation.tracked_item_id == item_id,
                 ListingObservation.observed_at == latest_observed_at,
+                ListingObservation.is_outlier.is_(False),
             )
         )
     )
@@ -219,9 +221,15 @@ def map_analysis(
         buckets[alias_lookup.get(raw_name, raw_name)].append(row)
 
     sold_by_map: dict[str, int] = defaultdict(int)
+    sale_price_num_by_map: dict[str, float] = defaultdict(float)  # sum(price * qty)
+    sale_price_den_by_map: dict[str, int] = defaultdict(int)      # sum(qty) for priced events
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         raw_name = event.map_name or "unknown"
-        sold_by_map[alias_lookup.get(raw_name, raw_name)] += event.quantity_sold
+        canonical = alias_lookup.get(raw_name, raw_name)
+        sold_by_map[canonical] += event.quantity_sold
+        if event.price is not None:
+            sale_price_num_by_map[canonical] += event.price * event.quantity_sold
+            sale_price_den_by_map[canonical] += event.quantity_sold
 
     results = []
     for map_name, group in sorted(buckets.items(), key=lambda kv: -sum(r.listing_count for r in kv[1])):
@@ -241,6 +249,8 @@ def map_analysis(
             ) / total_listings
         else:
             pooled_variance = 0.0
+        den = sale_price_den_by_map.get(map_name, 0)
+        avg_sale_price = sale_price_num_by_map[map_name] / den if den else None
         results.append(
             MapStatOut(
                 map_name=map_name,
@@ -252,6 +262,7 @@ def map_analysis(
                 total_quantity=sum(r.total_quantity for r in group),
                 stddev_price=pooled_variance ** 0.5,
                 estimated_units_sold=sold_by_map.get(map_name, 0),
+                avg_sale_price=avg_sale_price,
             )
         )
     return results
@@ -308,14 +319,22 @@ def sales_by_hour(
     """Estimated units sold by hour-of-day. See MapStatOut.estimated_units_sold for the
     inference method and its caveat (minimum-bound estimate, see sales_inference.py).
     """
-    buckets: dict[int, dict[str, int]] = defaultdict(lambda: {"sold": 0, "events": 0})
+    buckets: dict[int, dict] = defaultdict(lambda: {"sold": 0, "events": 0, "price_num": 0.0, "price_den": 0})
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         bucket = buckets[event.sale_attributed_at.hour]
         bucket["sold"] += event.quantity_sold
         bucket["events"] += 1
+        if event.price is not None:
+            bucket["price_num"] += event.price * event.quantity_sold
+            bucket["price_den"] += event.quantity_sold
 
     return [
-        SalesByHourOut(hour=hour, estimated_units_sold=b["sold"], sale_events=b["events"])
+        SalesByHourOut(
+            hour=hour,
+            estimated_units_sold=b["sold"],
+            sale_events=b["events"],
+            avg_sale_price=b["price_num"] / b["price_den"] if b["price_den"] else None,
+        )
         for hour, b in sorted(buckets.items())
     ]
 
@@ -356,7 +375,10 @@ def seller_analysis(
     A consistently negative deviation means the seller tends to undercut the
     market; positive means they tend to price above it.
     """
-    obs_stmt = select(ListingObservation).where(ListingObservation.tracked_item_id == item_id)
+    obs_stmt = select(ListingObservation).where(
+        ListingObservation.tracked_item_id == item_id,
+        ListingObservation.is_outlier.is_(False),
+    )
     if start is not None:
         obs_stmt = obs_stmt.where(ListingObservation.observed_at >= start.isoformat())
     if end is not None:
@@ -502,3 +524,78 @@ def trend_analysis(
         prior_avg_price=prior_avg,
         percent_change=pct,
     )
+
+
+@router.get("/outliers", response_model=list[OutlierObservationOut])
+def list_outliers(
+    item_id: int | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    limit: int = Query(default=200, le=1000),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """All observations flagged as outliers (price >5x the cycle's median), with the
+    cycle's clean median and the price multiplier included for context.
+    """
+    stmt = select(ListingObservation).where(ListingObservation.is_outlier.is_(True))
+    if item_id is not None:
+        stmt = stmt.where(ListingObservation.tracked_item_id == item_id)
+    if start is not None:
+        stmt = stmt.where(ListingObservation.observed_at >= start.isoformat())
+    if end is not None:
+        stmt = stmt.where(ListingObservation.observed_at < (end + timedelta(days=1)).isoformat())
+    stmt = stmt.order_by(ListingObservation.observed_at.desc()).offset(offset).limit(limit)
+    outliers = list(db.scalars(stmt))
+
+    if not outliers:
+        return []
+
+    # Build a name lookup for tracked items.
+    item_ids = {o.tracked_item_id for o in outliers}
+    items = {
+        row.id: (row.display_name or row.item_name)
+        for row in db.scalars(select(TrackedItem).where(TrackedItem.id.in_(item_ids)))
+    }
+
+    # For each unique (tracked_item_id, observed_at) cycle that has outliers, compute the
+    # clean median from the non-outlier rows in that same cycle.
+    cycle_keys = {(o.tracked_item_id, o.observed_at) for o in outliers}
+    cycle_medians: dict[tuple, int] = {}
+    for (tid, ts) in cycle_keys:
+        clean_prices = list(db.scalars(
+            select(ListingObservation.price).where(
+                ListingObservation.tracked_item_id == tid,
+                ListingObservation.observed_at == ts,
+                ListingObservation.is_outlier.is_(False),
+            )
+        ))
+        if clean_prices:
+            cycle_medians[(tid, ts)] = int(statistics.median(clean_prices))
+        else:
+            # Edge case: entire cycle is outliers — use their own median as reference.
+            all_prices = list(db.scalars(
+                select(ListingObservation.price).where(
+                    ListingObservation.tracked_item_id == tid,
+                    ListingObservation.observed_at == ts,
+                )
+            ))
+            cycle_medians[(tid, ts)] = int(statistics.median(all_prices)) if all_prices else 0
+
+    results = []
+    for obs in outliers:
+        median = cycle_medians.get((obs.tracked_item_id, obs.observed_at), 0)
+        results.append(OutlierObservationOut(
+            id=obs.id,
+            tracked_item_id=obs.tracked_item_id,
+            item_name=items.get(obs.tracked_item_id, "Unknown"),
+            observed_at=obs.observed_at,
+            price=obs.price,
+            quantity=obs.quantity,
+            seller_name=obs.seller_name,
+            shop_name=obs.shop_name,
+            map_name=obs.map_name,
+            cycle_median_price=median,
+            price_multiple=round(obs.price / median, 1) if median else 0.0,
+        ))
+    return results

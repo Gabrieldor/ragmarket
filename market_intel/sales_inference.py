@@ -29,6 +29,7 @@ class InferredSaleEvent:
     quantity_sold: int
     sale_attributed_at: datetime  # the observed_at this event is bucketed/dated by
     method: str  # 'decrease' | 'sellout_no_relist' | 'sellout_partial_relist'
+    price: int | None = None  # listing price at the moment the sale was detected
     relisted_ssi: str | None = None
     relisted_quantity: int | None = None
 
@@ -82,6 +83,7 @@ def compute_sale_events(observations: list) -> list[InferredSaleEvent]:
                         quantity_sold=prev.quantity - curr.quantity,
                         sale_attributed_at=curr.observed_at,
                         method="decrease",
+                        price=curr.price,
                     )
                 )
 
@@ -135,6 +137,7 @@ def compute_sale_events(observations: list) -> list[InferredSaleEvent]:
                     quantity_sold=sold_qty,
                     sale_attributed_at=last_obs.observed_at,
                     method=method,
+                    price=last_obs.price,
                     relisted_ssi=relisted_ssi,
                     relisted_quantity=relisted_qty,
                 )

@@ -13,6 +13,7 @@ from api.routers import (  # noqa: E402
     my_sales,
     notifications,
     observations,
+    scraper_config,
     sold_out,
     status,
 )
@@ -34,6 +35,7 @@ app.include_router(my_sales.router)
 app.include_router(sold_out.router)
 app.include_router(notifications.router)
 app.include_router(map_aliases.router)
+app.include_router(scraper_config.router)
 
 
 @app.get("/health")

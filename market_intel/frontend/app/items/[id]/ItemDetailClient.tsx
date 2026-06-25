@@ -276,6 +276,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <th className="px-3 py-2">Listings</th>
               <th className="px-3 py-2">Qty</th>
               <th className="px-3 py-2">Est. units sold</th>
+              <th className="px-3 py-2">Avg sale price</th>
             </tr>
           </thead>
           <tbody>
@@ -286,6 +287,9 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
                 <td className="px-3 py-2">{m.listing_count}</td>
                 <td className="px-3 py-2">{m.total_quantity}</td>
                 <td className="px-3 py-2">{m.estimated_units_sold}</td>
+                <td className="px-3 py-2">
+                  {m.avg_sale_price != null ? Math.round(m.avg_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
+                </td>
               </tr>
             ))}
           </tbody>

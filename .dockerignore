@@ -1,0 +1,38 @@
+# Python
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+**/.pytest_cache
+
+# Node / Next.js
+**/node_modules
+**/.next
+**/build
+**/.turbo
+
+# DB / runtime files
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/logs
+**/*.log
+**/*.pid
+
+# Secrets / config
+**/.env
+**/config.json
+
+# Git / tooling
+**/.git
+**/.claude
+**/.gitignore
+**/infra
+
+# Terraform
+**/.terraform
+**/*.tfstate
+**/*.tfstate.backup
+**/*.tfvars
