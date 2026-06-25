@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-fira-sans);
+  --font-mono: var(--font-fira-code);
+
+  --color-primary: #1e40af;
+  --color-secondary: #3b82f6;
+  --color-accent: #d97706;
+  --color-background: #f8fafc;
+  --color-foreground: #1e3a8a;
+  --color-card: #ffffff;
+  --color-card-foreground: #1e3a8a;
+  --color-muted: #e9eef6;
+  /* Darker than the skill's stock #64748b: that shade only clears ~4.1:1 against
+     --color-muted (the nested-table backgrounds use both together), short of WCAG AA's
+     4.5:1 for normal text. #475569 clears >6.5:1 against both --color-muted and white. */
+  --color-muted-foreground: #475569;
+  --color-border: #dbeafe;
+  --color-destructive: #dc2626;
+  --color-ring: #1e40af;
+
+  --table-row-height: 36px;
+  --card-padding: 12px;
+  --sidebar-width: 240px;
+}
+
+/* This dashboard uses a fixed light theme, intentionally, since it's an
+   internal tool -- no dark-mode variant. */
+body {
+  font-family: var(--font-sans);
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}

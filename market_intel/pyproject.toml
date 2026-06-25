@@ -1,0 +1,31 @@
+[project]
+name = "market-intel"
+version = "0.1.0"
+description = "Market intelligence platform built on top of the existing ragwatch scraper."
+requires-python = ">=3.10"
+dependencies = [
+    "ragwatch",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["scraper_adapter*", "db*", "collector*", "api*", "notifications*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

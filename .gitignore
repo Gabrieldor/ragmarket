@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+.env
+config.json
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+node_modules/
+.next/
+build/
+logs/
+*.log
+.claude/
