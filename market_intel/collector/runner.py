@@ -394,6 +394,9 @@ async def main() -> None:
                         if not (status_row and status_row.paused):
                             break
                 logger.info("Collector resumed.")
+                with get_session() as session:
+                    set_collector_status(session, state="starting")
+                    session.commit()
                 if stop_event.is_set():
                     break
 
