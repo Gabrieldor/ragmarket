@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boot-time script: reads Discord settings from DB, fetches the new public IP
 from EC2 instance metadata, and posts a notification to the Discord channel."""
-import json
+import asyncio
 import sqlite3
 import sys
 import urllib.request
@@ -27,21 +27,6 @@ def imds_get(path: str) -> str:
         return r.read().decode()
 
 
-def discord_post(token: str, channel_id: str, content: str) -> None:
-    data = json.dumps({"content": content}).encode()
-    req = urllib.request.Request(
-        f"https://discord.com/api/v10/channels/{channel_id}/messages",
-        data=data,
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as r:
-        print(f"Discord response: {r.status}")
-
-
 def main() -> None:
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -56,14 +41,30 @@ def main() -> None:
         sys.exit(0)
 
     discord_token, channel_id = row
-
     public_ip = imds_get("public-ipv4")
-    discord_post(
-        discord_token,
-        channel_id,
+    content = (
         f"**[Market Intel]** Instance restarted with new IP: `{public_ip}`\n"
-        f"Frontend: http://{public_ip}:3000",
+        f"Frontend: http://{public_ip}:3000"
     )
+
+    import discord
+
+    async def _send() -> None:
+        intents = discord.Intents.none()
+        client = discord.Client(intents=intents)
+
+        @client.event
+        async def on_ready() -> None:
+            try:
+                ch = await client.fetch_channel(int(channel_id))
+                await ch.send(content)
+                print(f"Sent to channel {channel_id}: {content!r}")
+            finally:
+                await client.close()
+
+        await client.start(discord_token)
+
+    asyncio.run(_send())
 
 
 if __name__ == "__main__":
