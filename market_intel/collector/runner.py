@@ -96,13 +96,14 @@ async def _scrape_one_item(
     its observations immediately. Returns (observation count, fresh location lookup count).
     """
     cycle_cache: dict[tuple[str, str], ShopLocation] = {}
+    lookup_requested: set[tuple[str, str]] = set()
     location_lookups = 0
 
     with get_session() as session:
 
         def needs_location(listing: DetailedListing) -> bool:
             key = (listing.seller_name or "", listing.shop_name or "")
-            if key in cycle_cache:
+            if key in cycle_cache or key in lookup_requested:
                 return False
             cached = get_cached_shop_location(
                 session, seller_name=key[0], shop_name=key[1], server_name=server_name
@@ -110,6 +111,7 @@ async def _scrape_one_item(
             if cached:
                 cycle_cache[key] = cached
                 return False
+            lookup_requested.add(key)
             return True
 
         results = await provider.scrape_item(
