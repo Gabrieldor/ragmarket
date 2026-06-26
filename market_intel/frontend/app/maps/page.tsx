@@ -20,6 +20,12 @@ const MAP_COLORS = [
   "#0891b2", "#ca8a04", "#db2777", "#4338ca", "#15803d",
 ];
 
+function mapColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return MAP_COLORS[h % MAP_COLORS.length];
+}
+
 export default function MapAnalysisPage() {
   const [items, setItems] = useState<TrackedItem[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -257,8 +263,8 @@ export default function MapAnalysisPage() {
               <YAxis fontSize={12} />
               <Tooltip />
               <Legend />
-              {mapNames.map((name, i) => (
-                <Bar key={name} dataKey={name} stackId="sold" fill={MAP_COLORS[i % MAP_COLORS.length]} />
+              {mapNames.map((name) => (
+                <Bar key={name} dataKey={name} stackId="sold" fill={mapColor(name)} />
               ))}
             </BarChart>
           </ResponsiveContainer>
