@@ -7,6 +7,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from db.models import (
+    CollectorConfig,
     CollectorStatus,
     DailyStat,
     HourlyStat,
@@ -288,6 +289,31 @@ def get_scraper_config(session: Session) -> ScraperConfig:
         config = ScraperConfig(id=1, updated_at=datetime.now())
         session.add(config)
         session.flush()
+    return config
+
+
+def get_collector_config(session: Session) -> CollectorConfig:
+    config = session.get(CollectorConfig, 1)
+    if config is None:
+        config = CollectorConfig(id=1, updated_at=datetime.now())
+        session.add(config)
+        session.flush()
+    return config
+
+
+def update_collector_config(
+    session: Session,
+    poll_interval_seconds: int | None = None,
+    item_delay_seconds: float | None = None,
+    location_click_delay_seconds: float | None = None,
+) -> CollectorConfig:
+    config = get_collector_config(session)
+    if poll_interval_seconds is not None:
+        config.poll_interval_seconds = poll_interval_seconds
+    if item_delay_seconds is not None:
+        config.item_delay_seconds = item_delay_seconds
+    if location_click_delay_seconds is not None:
+        config.location_click_delay_seconds = location_click_delay_seconds
     return config
 
 

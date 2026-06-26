@@ -220,6 +220,7 @@ class DetailedListingProvider(PlaywrightProvider):
         needs_location: Callable[[DetailedListing], bool],
         sort: str = "LOW_PRICE",
         max_pages: int = 1,
+        location_click_delay_seconds: float | None = None,
     ) -> list[tuple[DetailedListing, ShopLocationDetail | None]]:
         """Scrape an item's listings and, for any listing where ``needs_location`` returns
         True (i.e. its (seller, shop) pair is a cache-miss), click through to read its
@@ -275,7 +276,8 @@ class DetailedListingProvider(PlaywrightProvider):
                         # Throttle between modal clicks -- avoids hammering the site with
                         # rapid-fire interactions, a likely contributor to HTTP 429s.
                         if not location_lookups_disabled:
-                            await asyncio.sleep(settings.location_click_delay_seconds)
+                            delay = location_click_delay_seconds if location_click_delay_seconds is not None else settings.location_click_delay_seconds
+                            await asyncio.sleep(delay)
                     results.append((listing, location))
 
             return results

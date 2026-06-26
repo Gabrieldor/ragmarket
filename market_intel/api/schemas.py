@@ -415,6 +415,21 @@ class ScraperConfigUpdate(BaseModel):
     outlier_factor: float
 
 
+class CollectorConfigOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    poll_interval_seconds: int
+    item_delay_seconds: float
+    location_click_delay_seconds: float
+    updated_at: datetime
+
+
+class CollectorConfigUpdate(BaseModel):
+    poll_interval_seconds: int | None = None
+    item_delay_seconds: float | None = None
+    location_click_delay_seconds: float | None = None
+
+
 class OutlierObservationOut(BaseModel):
     id: int
     tracked_item_id: int

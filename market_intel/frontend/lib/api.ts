@@ -146,6 +146,13 @@ export type ScraperConfig = {
   updated_at: string;
 };
 
+export type CollectorConfig = {
+  poll_interval_seconds: number;
+  item_delay_seconds: number;
+  location_click_delay_seconds: number;
+  updated_at: string;
+};
+
 export type OutlierObservation = {
   id: number;
   tracked_item_id: number;
@@ -378,6 +385,10 @@ export const api = {
   getScraperConfig: () => apiFetch<ScraperConfig>("/scraper-config"),
   updateScraperConfig: (body: { outlier_factor: number }) =>
     apiFetch<ScraperConfig>("/scraper-config", { method: "PATCH", body: JSON.stringify(body) }),
+
+  getCollectorConfig: () => apiFetch<CollectorConfig>("/collector/config"),
+  updateCollectorConfig: (body: Partial<{ poll_interval_seconds: number; item_delay_seconds: number; location_click_delay_seconds: number }>) =>
+    apiFetch<CollectorConfig>("/collector/config", { method: "PATCH", body: JSON.stringify(body) }),
 
   collectorStatus: () => apiFetch<CollectorStatus>("/collector/status"),
   listOutliers: (params?: { item_id?: number; start?: string; end?: string; limit?: number; offset?: number }) => {

@@ -252,6 +252,22 @@ class ScraperConfig(Base):
     )
 
 
+class CollectorConfig(Base):
+    """Single-row table holding collector poll-timing settings editable live from
+    the dashboard without an app restart.
+    """
+
+    __tablename__ = "collector_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    item_delay_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=15.0)
+    location_click_delay_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=2.5)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
 class SoldOutEvent(Base):
     """A persisted, audit-able record of one listing crossing the low-stock threshold
     (see sold_out_inference.py for the detection method). One row per listing lifetime --

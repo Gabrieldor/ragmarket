@@ -3,8 +3,14 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from api.schemas import CollectorStatusOut
-from db.repository import get_collector_status, set_collector_paused, set_collector_retry
+from api.schemas import CollectorConfigOut, CollectorConfigUpdate, CollectorStatusOut
+from db.repository import (
+    get_collector_config,
+    get_collector_status,
+    set_collector_paused,
+    set_collector_retry,
+    update_collector_config,
+)
 from db.session import get_db
 from settings import settings
 
@@ -72,3 +78,20 @@ def retry_collector(db: Session = Depends(get_db)):
     set_collector_retry(db)
     db.commit()
     return collector_status(db)
+
+
+@router.get("/config", response_model=CollectorConfigOut)
+def get_config(db: Session = Depends(get_db)):
+    return get_collector_config(db)
+
+
+@router.patch("/config", response_model=CollectorConfigOut)
+def update_config(body: CollectorConfigUpdate, db: Session = Depends(get_db)):
+    cfg = update_collector_config(
+        db,
+        poll_interval_seconds=body.poll_interval_seconds,
+        item_delay_seconds=body.item_delay_seconds,
+        location_click_delay_seconds=body.location_click_delay_seconds,
+    )
+    db.commit()
+    return cfg

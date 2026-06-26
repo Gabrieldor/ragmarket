@@ -30,6 +30,7 @@ from db.models import ListingObservation, NotificationSettings, ScrapeRun, ShopL
 from db.repository import (  # noqa: E402
     finish_scrape_run,
     get_cached_shop_location,
+    get_collector_config,
     get_collector_status,
     get_notification_settings,
     get_scraper_config,
@@ -89,6 +90,7 @@ async def _scrape_one_item(
     observed_at: datetime,
     run_id: int,
     sold_out_enabled: bool,
+    location_click_delay_seconds: float | None = None,
 ) -> tuple[int, int]:
     """Scrape one tracked item, resolve locations (cache or fresh lookup), and commit
     its observations immediately. Returns (observation count, fresh location lookup count).
@@ -111,7 +113,8 @@ async def _scrape_one_item(
             return True
 
         results = await provider.scrape_item(
-            item_name, store_type, server_name, needs_location, max_pages=1
+            item_name, store_type, server_name, needs_location, max_pages=1,
+            location_click_delay_seconds=location_click_delay_seconds,
         )
 
         observations: list[ListingObservation] = []
@@ -191,6 +194,7 @@ async def run_cycle(provider: DetailedListingProvider) -> bool:
         ]
         run = start_scrape_run(session)
         run_id = run.id
+        cfg = get_collector_config(session)
 
     if not tracked:
         logger.info("No active tracked items. Nothing to scrape this cycle.")
@@ -209,7 +213,7 @@ async def run_cycle(provider: DetailedListingProvider) -> bool:
 
     for index, (tracked_item_id, item_name, server_name, store_type, sold_out_enabled) in enumerate(tracked):
         if index > 0:
-            await asyncio.sleep(settings.item_delay_seconds)
+            await asyncio.sleep(cfg.item_delay_seconds)
 
         with get_session() as session:
             set_collector_status(session, state="scraping", current_item_name=item_name)
@@ -220,6 +224,7 @@ async def run_cycle(provider: DetailedListingProvider) -> bool:
             obs_count, lookups = await _scrape_one_item(
                 provider, tracked_item_id, item_name, server_name, store_type, observed_at,
                 run_id, sold_out_enabled,
+                location_click_delay_seconds=cfg.location_click_delay_seconds,
             )
         except RateLimitError:
             logger.warning(
@@ -340,8 +345,10 @@ async def main() -> None:
     # retrying immediately and risking extending an still-active block.
     consecutive_rate_limits = _count_recent_consecutive_rate_limits()
     if consecutive_rate_limits > 0:
+        with get_session() as session:
+            _startup_cfg = get_collector_config(session)
         resume_wait = min(
-            settings.poll_interval_seconds * (RATE_LIMIT_BACKOFF_MULTIPLIER**consecutive_rate_limits),
+            _startup_cfg.poll_interval_seconds * (RATE_LIMIT_BACKOFF_MULTIPLIER**consecutive_rate_limits),
             MAX_RATE_LIMIT_BACKOFF_SECONDS,
         )
         logger.warning(
@@ -450,7 +457,9 @@ async def main() -> None:
                     logger.exception("Unhandled error during scrape cycle")
 
             elapsed = time.monotonic() - cycle_start
-            target_interval = settings.poll_interval_seconds
+            with get_session() as session:
+                cfg = get_collector_config(session)
+            target_interval = cfg.poll_interval_seconds
             if rate_limited:
                 # Escalates with each consecutive 429 (3x, 9x, 27x, ... capped) rather than a
                 # flat multiplier -- a single fixed backoff isn't enough if the site's block

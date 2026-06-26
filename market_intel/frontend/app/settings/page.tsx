@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, MapAlias, ScraperConfig, SoldOutConfig } from "@/lib/api";
+import { api, CollectorConfig, MapAlias, ScraperConfig, SoldOutConfig } from "@/lib/api";
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<SoldOutConfig | null>(null);
@@ -18,6 +18,14 @@ export default function SettingsPage() {
   const [outlierSaving, setOutlierSaving] = useState(false);
   const [outlierSaved, setOutlierSaved] = useState(false);
   const [outlierError, setOutlierError] = useState<string | null>(null);
+
+  const [collectorConfig, setCollectorConfig] = useState<CollectorConfig | null>(null);
+  const [pollInterval, setPollInterval] = useState("600");
+  const [itemDelay, setItemDelay] = useState("15");
+  const [modalDelay, setModalDelay] = useState("2.5");
+  const [timingsSaving, setTimingsSaving] = useState(false);
+  const [timingsSaved, setTimingsSaved] = useState(false);
+  const [timingsError, setTimingsError] = useState<string | null>(null);
 
   const [rotatingIp, setRotatingIp] = useState(false);
   const [rotateMsg, setRotateMsg] = useState<string | null>(null);
@@ -50,8 +58,36 @@ export default function SettingsPage() {
         setOutlierFactor(String(c.outlier_factor));
       })
       .catch((err) => setOutlierError(String(err)));
+    api.getCollectorConfig()
+      .then((c) => {
+        setCollectorConfig(c);
+        setPollInterval(String(c.poll_interval_seconds));
+        setItemDelay(String(c.item_delay_seconds));
+        setModalDelay(String(c.location_click_delay_seconds));
+      })
+      .catch((err) => setTimingsError(String(err)));
     refreshAliases();
   }, []);
+
+  async function handleTimingsSave(e: React.FormEvent) {
+    e.preventDefault();
+    setTimingsSaving(true);
+    setTimingsError(null);
+    setTimingsSaved(false);
+    try {
+      const updated = await api.updateCollectorConfig({
+        poll_interval_seconds: Number(pollInterval),
+        item_delay_seconds: Number(itemDelay),
+        location_click_delay_seconds: Number(modalDelay),
+      });
+      setCollectorConfig(updated);
+      setTimingsSaved(true);
+    } catch (err) {
+      setTimingsError(String(err));
+    } finally {
+      setTimingsSaving(false);
+    }
+  }
 
   async function handleOutlierSave(e: React.FormEvent) {
     e.preventDefault();
@@ -237,6 +273,63 @@ export default function SettingsPage() {
           </button>
           {outlierSaved && <span className="text-green-700 text-sm ml-3">Saved — existing data re-flagged.</span>}
           {outlierError && <p className="text-destructive text-sm mt-1">{outlierError}</p>}
+        </form>
+      </section>
+
+      <section className="max-w-lg">
+        <h2 className="text-sm font-semibold text-foreground mb-2">Poll timings</h2>
+        <p className="text-muted-foreground text-sm mb-3">
+          Controls how aggressively the collector hits the site. Lower values scrape faster
+          but increase the chance of 429 rate-limits.
+        </p>
+        <form onSubmit={handleTimingsSave} className="space-y-4 border border-border rounded p-4">
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Cycle interval (s)</label>
+              <input
+                type="number"
+                min={60}
+                step={30}
+                value={pollInterval}
+                onChange={(e) => setPollInterval(e.target.value)}
+                className="border border-border rounded px-3 py-1.5 text-sm w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Wait between full scrape cycles</p>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Item delay (s)</label>
+              <input
+                type="number"
+                min={1}
+                step={0.5}
+                value={itemDelay}
+                onChange={(e) => setItemDelay(e.target.value)}
+                className="border border-border rounded px-3 py-1.5 text-sm w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Wait between items in a cycle</p>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Modal delay (s)</label>
+              <input
+                type="number"
+                min={0.5}
+                step={0.5}
+                value={modalDelay}
+                onChange={(e) => setModalDelay(e.target.value)}
+                className="border border-border rounded px-3 py-1.5 text-sm w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Wait between location modal clicks</p>
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={timingsSaving || !collectorConfig}
+            className="bg-primary text-white text-sm px-4 py-1.5 rounded disabled:opacity-50"
+          >
+            {timingsSaving ? "Saving..." : "Save"}
+          </button>
+          {timingsSaved && <span className="text-green-700 text-sm ml-3">Saved — takes effect next cycle.</span>}
+          {timingsError && <p className="text-destructive text-sm mt-1">{timingsError}</p>}
         </form>
       </section>
 
