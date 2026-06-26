@@ -582,6 +582,10 @@ def sync_my_listing_sessions(session: Session, tracked_item_id: int) -> int:
                     MyListingSession.seller_name == result.seller_name,
                     MyListingSession.ended_reason == "shop_removed",
                     MyListingSession.dismissed.is_(False),
+                    # The candidate session must be older than this listing -- guards against
+                    # old SSI raw observations triggering a backwards continuation on a session
+                    # that was already continued to a newer SSI in a previous cycle.
+                    MyListingSession.window_start < result.window_start,
                     MyListingSession.window_end
                     >= result.window_start - timedelta(hours=_SHOP_REMOVED_CONTINUATION_HOURS),
                 ).order_by(MyListingSession.window_end.desc())

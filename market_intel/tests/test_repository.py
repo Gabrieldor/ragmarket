@@ -545,3 +545,65 @@ def test_continuation_within_single_sync_does_not_double_count_when_new_ssi_iter
     s = sessions[0]
     assert s.ssi == "B"
     assert s.total_quantity_sold == 0  # A had 0 real sales; B hasn't sold yet
+
+
+def test_old_ssi_raw_obs_do_not_reverse_continuation_on_subsequent_syncs(session):
+    """Regression: after a continuation (A→B), old SSI A raw observations must NOT trigger
+    a backwards continuation that re-assigns B's session back to A and closes it.
+
+    Root cause: without window_start < result.window_start in the continuation query, result
+    "A" (old obs, window_start=t0) could match session B (window_start=t2) as a continuation
+    target, reversing the SSI from B→A and closing the session with inflated qty. Meanwhile,
+    result "B" lands in consumed_ssis and gets skipped, effectively dropping the active listing.
+    """
+    item = add_tracked_item(session, item_name="Elunium")
+    add_vendor_alias(session, "MyAlt")
+    run = ScrapeRun(status="success")
+    session.add(run)
+    session.flush()
+
+    t0 = datetime(2026, 6, 3, 10, 0)
+    t1 = t0 + timedelta(hours=1)
+    t2 = t1 + timedelta(hours=1)
+
+    # Simulate state after a correct first continuation: session has ssi="B", ended_reason=None.
+    # But imagine the old code left ended_reason="shop_removed" on the active session (bug).
+    # We manually construct that state here.
+    existing = MyListingSession(
+        tracked_item_id=item.id,
+        ssi="B",
+        seller_name="MyAlt",
+        shop_name="MyShop",
+        map_name="prt_mk.gat",
+        price=20000,
+        window_start=t2,
+        window_end=t2 + timedelta(hours=24),
+        initial_quantity=100,
+        last_known_quantity=100,
+        total_quantity_sold=0,
+        status="active",
+        ended_reason="shop_removed",  # buggy state left by old code
+    )
+    session.add(existing)
+    session.flush()
+
+    # Raw obs: both old A (disappeared at t1) and current B (still active at t2).
+    sentinel_run = ScrapeRun(status="success")
+    session.add(sentinel_run)
+    session.flush()
+    session.add_all([
+        _obs(item.id, run.id, "A", t0, qty=100),
+        _obs(item.id, sentinel_run.id, "SENTINEL", t1, qty=5, seller="OtherSeller"),
+        _obs(item.id, run.id, "B", t2, qty=100),
+    ])
+    session.commit()
+
+    sync_my_listing_sessions(session, item.id)
+    session.commit()
+
+    sessions_all = session.query(MyListingSession).filter_by(tracked_item_id=item.id).all()
+    # Session B must NOT have been reversed back to ssi A or closed.
+    b_session = session.query(MyListingSession).filter_by(tracked_item_id=item.id, ssi="B").first()
+    assert b_session is not None, "Session B must still exist and not be re-assigned to A"
+    assert b_session.status == "active"
+    assert b_session.total_quantity_sold == 0
