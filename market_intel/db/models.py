@@ -211,6 +211,7 @@ class CollectorStatus(Base):
     # 'starting' | 'scraping' | 'sleeping' | 'rate_limited'
     current_item_name: Mapped[str | None] = mapped_column(String, nullable=True)
     next_cycle_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_item_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     consecutive_rate_limits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     retry_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

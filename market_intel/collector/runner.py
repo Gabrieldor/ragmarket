@@ -215,6 +215,10 @@ async def run_cycle(provider: DetailedListingProvider) -> bool:
 
     for index, (tracked_item_id, item_name, server_name, store_type, sold_out_enabled) in enumerate(tracked):
         if index > 0:
+            next_item_at = datetime.now() + timedelta(seconds=cfg.item_delay_seconds)
+            with get_session() as session:
+                set_collector_status(session, state="scraping", next_item_at=next_item_at)
+                session.commit()
             await asyncio.sleep(cfg.item_delay_seconds)
 
         with get_session() as session:

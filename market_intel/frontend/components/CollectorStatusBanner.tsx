@@ -49,6 +49,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
   const [now, setNow] = useState(() => new Date());
   const [toggling, setToggling] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [retrySent, setRetrySent] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,10 +97,16 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
     try {
       const updated = await api.retryCollector();
       setStatus(updated);
+      setRetrySent(true);
     } finally {
       setRetrying(false);
     }
   }
+
+  // Clear the "retry sent" confirmation once the collector leaves rate_limited state.
+  useEffect(() => {
+    if (retrySent && status?.state !== "rate_limited") setRetrySent(false);
+  }, [status?.state, retrySent]);
 
   const styles: Record<CollectorStatus["state"], string> = {
     scraping: "bg-blue-50 text-blue-800 border-blue-200",
@@ -126,22 +133,35 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
       ? formatCountdown(status.next_cycle_at, now)
       : null;
 
+  const itemCountdown =
+    status.state === "scraping" && status.next_item_at
+      ? formatCountdown(status.next_item_at, now)
+      : null;
+
   let message: string;
   switch (status.state) {
     case "scraping":
-      message = `Scraping now${status.current_item_name ? `: ${status.current_item_name}` : "..."}`;
+      if (itemCountdown) {
+        message = `Between items — next in ${itemCountdown}`;
+      } else {
+        message = `Scraping now${status.current_item_name ? `: ${status.current_item_name}` : "..."}`;
+      }
       break;
     case "rate_limited":
-      message = `Rate-limited by the site -- resuming at ${formatTime(status.next_cycle_at)} (consecutive hit #${status.consecutive_rate_limits})`;
+      if (retrySent) {
+        message = `Retry sent — scraping will resume shortly`;
+      } else {
+        message = `Rate-limited by the site — resuming at ${formatTime(status.next_cycle_at)} (consecutive hit #${status.consecutive_rate_limits})`;
+      }
       break;
     case "sleeping":
-      message = `Idle -- next cycle at ${formatTime(status.next_cycle_at)}`;
+      message = `Idle — next cycle at ${formatTime(status.next_cycle_at)}`;
       break;
     case "starting":
       message = "Collector is starting up...";
       break;
     case "paused":
-      message = "Paused -- click to resume";
+      message = "Paused — click to resume";
       break;
     case "offline":
     default:
@@ -150,11 +170,11 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
   }
 
   const isRateLimited = status.state === "rate_limited";
-  const clickAction = isRateLimited ? requestRetry : canToggle ? togglePause : undefined;
+  const clickAction = isRateLimited && !retrySent ? requestRetry : canToggle ? togglePause : undefined;
   const clickable = !!clickAction;
   const hoverClass = clickable ? "cursor-pointer hover:opacity-80 active:opacity-60 transition-opacity" : "";
   const hint = isRateLimited
-    ? (retrying ? "Requesting retry…" : "Click to retry now")
+    ? (retrying ? "Requesting retry…" : retrySent ? "Retry sent" : "Click to retry now")
     : canToggle
     ? (status.paused ? "Click to resume" : "Click to pause")
     : undefined;
@@ -174,7 +194,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
         <div className="min-w-0">
           <div className="font-medium capitalize">{status.state.replace("_", " ")}</div>
           {countdown && <div className="text-sm font-semibold tabular-nums">{countdown}</div>}
-          <div className="text-[11px] opacity-80">{isRateLimited ? (retrying ? "Requesting retry…" : "Click to retry now") : message}</div>
+          <div className="text-[11px] opacity-80">{isRateLimited ? (retrying ? "Requesting retry…" : retrySent ? "Retry sent — resuming shortly" : "Click to retry now") : message}</div>
         </div>
       </div>
     );

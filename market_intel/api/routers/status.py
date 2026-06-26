@@ -30,7 +30,7 @@ def collector_status(db: Session = Depends(get_db)):
     if status is None:
         return CollectorStatusOut(
             state="offline", current_item_name=None, next_cycle_at=None,
-            consecutive_rate_limits=0, paused=False, updated_at=None,
+            next_item_at=None, consecutive_rate_limits=0, paused=False, updated_at=None,
         )
 
     now = datetime.now()

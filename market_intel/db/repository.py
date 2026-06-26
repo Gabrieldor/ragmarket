@@ -210,6 +210,7 @@ def set_collector_status(
     state: str,
     current_item_name: str | None = None,
     next_cycle_at: datetime | None = None,
+    next_item_at: datetime | None = None,
     consecutive_rate_limits: int | None = None,
 ) -> CollectorStatus:
     status = session.get(CollectorStatus, 1)
@@ -220,6 +221,7 @@ def set_collector_status(
     status.state = state
     status.current_item_name = current_item_name
     status.next_cycle_at = next_cycle_at
+    status.next_item_at = next_item_at
     if consecutive_rate_limits is not None:
         status.consecutive_rate_limits = consecutive_rate_limits
     status.updated_at = datetime.now()

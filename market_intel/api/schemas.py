@@ -221,6 +221,7 @@ class CollectorStatusOut(BaseModel):
     state: str  # 'starting' | 'scraping' | 'sleeping' | 'rate_limited' | 'offline' | 'paused'
     current_item_name: str | None
     next_cycle_at: datetime | None
+    next_item_at: datetime | None
     consecutive_rate_limits: int
     paused: bool
     updated_at: datetime | None

@@ -136,6 +136,7 @@ export type CollectorStatus = {
   state: "starting" | "scraping" | "sleeping" | "rate_limited" | "offline" | "paused";
   current_item_name: string | null;
   next_cycle_at: string | null;
+  next_item_at: string | null;
   consecutive_rate_limits: number;
   paused: boolean;
   updated_at: string | null;
