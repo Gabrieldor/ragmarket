@@ -50,6 +50,9 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
   const [toggling, setToggling] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retrySent, setRetrySent] = useState(false);
+  // Rate-limit count at the moment the user clicked retry — used to detect if the
+  // retry attempt itself got rate-limited (count increases while still rate_limited).
+  const [retrySentAtCount, setRetrySentAtCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,11 +81,17 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
     };
   }, []);
 
-  // Clear the "retry sent" confirmation once the collector leaves rate_limited state.
-  // Must be before the early return to satisfy Rules of Hooks (hooks must run unconditionally).
+  // Clear retrySent when the collector leaves rate_limited (retry worked) OR when the
+  // rate-limit count increases while still rate_limited (retry ran but got blocked again).
+  // Must be before the early return to satisfy Rules of Hooks.
   useEffect(() => {
-    if (retrySent && status?.state !== "rate_limited") setRetrySent(false);
-  }, [status?.state, retrySent]);
+    if (!retrySent) return;
+    if (status?.state !== "rate_limited") {
+      setRetrySent(false);
+    } else if ((status?.consecutive_rate_limits ?? 0) > retrySentAtCount) {
+      setRetrySent(false);
+    }
+  }, [status?.state, status?.consecutive_rate_limits, retrySent, retrySentAtCount]);
 
   if (!status) return null;
 
@@ -103,6 +112,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
     try {
       const updated = await api.retryCollector();
       setStatus(updated);
+      setRetrySentAtCount(updated.consecutive_rate_limits);
       setRetrySent(true);
     } finally {
       setRetrying(false);
