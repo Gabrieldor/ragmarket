@@ -50,6 +50,7 @@ def collector_status(db: Session = Depends(get_db)):
         state="offline" if is_stale else effective_state,
         current_item_name=status.current_item_name,
         next_cycle_at=status.next_cycle_at,
+        next_item_at=status.next_item_at,
         consecutive_rate_limits=status.consecutive_rate_limits,
         paused=status.paused,
         updated_at=status.updated_at,

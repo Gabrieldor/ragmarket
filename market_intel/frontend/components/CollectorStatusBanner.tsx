@@ -213,7 +213,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
       <StatusIcon size={18} className={status.state === "scraping" ? "animate-spin" : ""} aria-hidden />
       <span className="font-medium capitalize">{status.state.replace("_", " ")}</span>
       <span>—</span>
-      <span>{isRateLimited ? (retrying ? "Requesting retry…" : "Click to retry now") : message}</span>
+      <span>{isRateLimited ? (retrying ? "Requesting retry…" : retrySent ? "Retry sent — resuming shortly" : "Click to retry now") : message}</span>
       {countdown && !retrying && <span className="font-semibold tabular-nums">({countdown})</span>}
     </div>
   );
