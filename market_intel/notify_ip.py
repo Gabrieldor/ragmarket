@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Boot-time script: reads Discord settings from DB, fetches the new public IP
-from EC2 instance metadata, and posts a notification to the Discord channel."""
+from EC2 instance metadata, and posts a notification to the Discord channel.
+Also clears the rate-limit backoff so the collector retries immediately."""
 import asyncio
 import sqlite3
 import sys
@@ -31,8 +32,17 @@ def main() -> None:
     conn = sqlite3.connect(DB_PATH)
     try:
         row = conn.execute(
-            "SELECT discord_token, channel_id FROM notification_settings WHERE id = 1"
+            "SELECT discord_token, channel_id, user_mention "
+            "FROM notification_settings WHERE id = 1"
         ).fetchone()
+
+        # Clear rate-limit backoff so collector retries immediately on the new IP.
+        # Sets retry_requested in case the collector is already sleeping;
+        # zeroes consecutive_rate_limits so it won't backoff on next startup.
+        conn.execute(
+            "UPDATE collector_status SET consecutive_rate_limits = 0, retry_requested = 1"
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -40,10 +50,12 @@ def main() -> None:
         print("No Discord token/channel configured — skipping notification.")
         sys.exit(0)
 
-    discord_token, channel_id = row
+    discord_token, channel_id, user_mention = row
     public_ip = imds_get("public-ipv4")
+
+    mention = f"{user_mention} " if user_mention else ""
     content = (
-        f"**[Market Intel]** Instance restarted with new IP: `{public_ip}`\n"
+        f"{mention}**[Market Intel]** Instance restarted with new IP: `{public_ip}`\n"
         f"Frontend: http://{public_ip}:3000"
     )
 
