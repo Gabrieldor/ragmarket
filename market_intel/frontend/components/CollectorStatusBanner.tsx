@@ -78,6 +78,12 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
     };
   }, []);
 
+  // Clear the "retry sent" confirmation once the collector leaves rate_limited state.
+  // Must be before the early return to satisfy Rules of Hooks (hooks must run unconditionally).
+  useEffect(() => {
+    if (retrySent && status?.state !== "rate_limited") setRetrySent(false);
+  }, [status?.state, retrySent]);
+
   if (!status) return null;
 
   async function togglePause() {
@@ -102,11 +108,6 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
       setRetrying(false);
     }
   }
-
-  // Clear the "retry sent" confirmation once the collector leaves rate_limited state.
-  useEffect(() => {
-    if (retrySent && status?.state !== "rate_limited") setRetrySent(false);
-  }, [status?.state, retrySent]);
 
   const styles: Record<CollectorStatus["state"], string> = {
     scraping: "bg-blue-50 text-blue-800 border-blue-200",
