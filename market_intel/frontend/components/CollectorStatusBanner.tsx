@@ -63,7 +63,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
           if (!cancelled) {
             setStatus({
               state: "offline", current_item_name: null, next_cycle_at: null,
-              consecutive_rate_limits: 0, updated_at: null, paused: false,
+              next_item_at: null, consecutive_rate_limits: 0, updated_at: null, paused: false,
             });
           }
         });
