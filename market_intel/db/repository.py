@@ -562,7 +562,14 @@ def sync_my_listing_sessions(session: Session, tracked_item_id: int) -> int:
     }
 
     new_chunk_count = 0
+    # Track old SSIs absorbed by a continuation this cycle so we don't process them again
+    # if they appear later in the loop (raw observations for old SSIs are never deleted).
+    consumed_ssis: set[str] = set()
+
     for result in compute_my_listing_sessions(my_observations, all_observations):
+        if result.ssi in consumed_ssis:
+            continue  # absorbed by a continuation earlier in this cycle
+
         session_row = existing_sessions.get(result.ssi)
         if session_row is not None and (session_row.status != "active" or session_row.dismissed):
             continue  # already closed, or dismissed by the user -- never reopen/resurrect
@@ -582,15 +589,18 @@ def sync_my_listing_sessions(session: Session, tracked_item_id: int) -> int:
 
             if continuation is not None:
                 # Reuse the old session: update SSI and extend with new sales.
-                del existing_sessions[continuation.ssi]
+                old_ssi = continuation.ssi
+                consumed_ssis.add(old_ssi)  # prevent double-processing the absorbed SSI
+                del existing_sessions[old_ssi]
                 continuation.ssi = result.ssi
                 continuation.window_end = result.window_end
                 continuation.last_known_quantity = result.last_known_quantity
                 continuation.total_quantity_sold += result.total_quantity_sold
-                # If the new stint ends conclusively, clear shop_removed so it doesn't
-                # get re-continued again on the next cycle.
+                # Always clear ended_reason so the old SSI can't re-trigger continuation
+                # on subsequent sync cycles (raw observations for old SSIs remain in the DB
+                # and would otherwise match the shop_removed query every cycle).
+                continuation.ended_reason = None
                 if result.status != "active":
-                    continuation.ended_reason = None
                     continuation.status = result.status
                 else:
                     continuation.status = "active"
