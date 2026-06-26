@@ -17,12 +17,12 @@ Without --fix, prints a dry-run report. Add --fix to apply changes.
 import sys
 from datetime import datetime, timedelta
 
-sys.path.insert(0, "/home/ubuntu/Rag")
+sys.path.insert(0, "/home/ubuntu/Rag/market_intel")
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from market_intel.db.models import MyListingSession, MySaleEvent
-from market_intel.db.session import SessionLocal
+from db.models import MyListingSession, MySaleEvent
+from db.session import SessionLocal
 
 
 def main():
