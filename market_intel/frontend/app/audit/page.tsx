@@ -9,6 +9,7 @@ import {
   SaleMethodBreakdown,
   TrackedItem,
 } from "@/lib/api";
+import { fmtTs } from "@/lib/utils";
 
 const METHOD_LABELS: Record<string, string> = {
   decrease: "Quantity decrease (reliable)",
@@ -195,7 +196,7 @@ export default function AuditPage() {
                                 {methodEvents.map((e) => (
                                   <tr key={e.id} className="border-t border-border hover:bg-card/50">
                                     <td className="px-2 py-1 text-muted-foreground">
-                                      {e.sale_attributed_at.replace("T", " ")}
+                                      {fmtTs(e.sale_attributed_at)}
                                     </td>
                                     <td className="px-2 py-1">{e.seller_name}</td>
                                     <td className="px-2 py-1">{e.map_name}</td>
@@ -285,7 +286,7 @@ export default function AuditPage() {
                                     <td className="px-2 py-1">{sess.seller_name}</td>
                                     <td className="px-2 py-1">{sess.map_name}</td>
                                     <td className="px-2 py-1 text-muted-foreground">
-                                      {sess.window_start.replace("T", " ")}
+                                      {fmtTs(sess.window_start)}
                                     </td>
                                     <td className="px-2 py-1">
                                       {sess.total_quantity_sold} / {sess.initial_quantity}

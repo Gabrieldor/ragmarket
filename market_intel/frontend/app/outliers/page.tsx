@@ -9,9 +9,7 @@ function fmt(n: number) {
   return n.toLocaleString("pt-BR");
 }
 
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleString();
-}
+import { fmtTs } from "@/lib/utils";
 
 export default function OutliersPage() {
   const [items, setItems] = useState<TrackedItem[]>([]);
@@ -114,7 +112,7 @@ export default function OutliersPage() {
                 <tr key={row.id} className="hover:bg-muted/40 transition-colors">
                   <td className="px-3 py-2 font-medium">{row.item_name}</td>
                   <td className="px-3 py-2 text-muted-foreground tabular-nums">
-                    {formatTime(row.observed_at)}
+                    {fmtTs(row.observed_at)}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-amber-700 font-semibold">
                     {fmt(row.price)}

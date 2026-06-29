@@ -3,9 +3,12 @@
 import { useEffect, useState } from "react";
 import { api, ListingHistory, TrackedItem } from "@/lib/api";
 import Badge from "@/components/Badge";
+import { fmtTs } from "@/lib/utils";
 
 function formatDuration(startIso: string, endIso: string): string {
-  const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+  const s = startIso.endsWith("Z") ? startIso : startIso + "Z";
+  const e = endIso.endsWith("Z") ? endIso : endIso + "Z";
+  const ms = new Date(e).getTime() - new Date(s).getTime();
   const totalMinutes = Math.max(0, Math.round(ms / 60000));
   const days = Math.floor(totalMinutes / 1440);
   const hours = Math.floor((totalMinutes % 1440) / 60);
@@ -91,8 +94,8 @@ export default function ListingHistoryPage() {
                 </td>
                 <td className="px-3 py-2 font-medium">{row.seller_name}</td>
                 <td className="px-3 py-2">{row.map_name}</td>
-                <td className="px-3 py-2 text-muted-foreground">{row.first_observed_at.replace("T", " ")}</td>
-                <td className="px-3 py-2 text-muted-foreground">{row.last_observed_at.replace("T", " ")}</td>
+                <td className="px-3 py-2 text-muted-foreground">{fmtTs(row.first_observed_at)}</td>
+                <td className="px-3 py-2 text-muted-foreground">{fmtTs(row.last_observed_at)}</td>
                 <td className="px-3 py-2">
                   {formatDuration(row.first_observed_at, row.is_active ? now : row.last_observed_at)}
                   {row.is_active ? " (ongoing)" : ""}

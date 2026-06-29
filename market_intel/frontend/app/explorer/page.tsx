@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, Observation, TrackedItem } from "@/lib/api";
+import { fmtTs } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
 
@@ -120,7 +121,7 @@ export default function ExplorerPage() {
           <tbody>
             {observations.map((o) => (
               <tr key={o.id} className="border-t border-border hover:bg-muted/50">
-                <td className="px-3 py-2 text-muted-foreground">{o.observed_at.replace("T", " ")}</td>
+                <td className="px-3 py-2 text-muted-foreground">{fmtTs(o.observed_at)}</td>
                 <td className="px-3 py-2">{itemNameById.get(o.tracked_item_id) ?? o.tracked_item_id}</td>
                 <td className="px-3 py-2">{o.price}</td>
                 <td className="px-3 py-2">{o.quantity}</td>

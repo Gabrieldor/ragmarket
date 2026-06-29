@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, NotificationEvent, NotificationSettings, WatchRule } from "@/lib/api";
 import Badge from "@/components/Badge";
+import { fmtTs } from "@/lib/utils";
 
 const EVENT_LABELS: Record<string, string> = {
   triggered: "Triggered",
@@ -192,7 +193,7 @@ export default function WatcherPage() {
                     {rule.last_checked_price != null ? rule.last_checked_price.toLocaleString() : "—"}
                     {rule.last_checked_at && (
                       <span className="text-muted-foreground text-xs ml-1">
-                        (as of {rule.last_checked_at.replace("T", " ").slice(0, 16)})
+                        (as of {fmtTs(rule.last_checked_at)})
                       </span>
                     )}
                   </td>
@@ -349,7 +350,7 @@ export default function WatcherPage() {
                 const rule = rules.find((r) => r.id === e.watch_rule_id);
                 return (
                   <tr key={e.id} className="border-t border-border hover:bg-muted/50">
-                    <td className="px-3 py-2 text-muted-foreground">{e.created_at.replace("T", " ")}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{fmtTs(e.created_at)}</td>
                     <td className="px-3 py-2 font-medium">{rule ? rule.raw : `#${e.watch_rule_id}`}</td>
                     <td className="px-3 py-2">{EVENT_LABELS[e.event_type] || e.event_type}</td>
                     <td className="px-3 py-2">{e.price ?? "—"}</td>

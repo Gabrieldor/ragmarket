@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { fmtTs } from "@/lib/utils";
 import {
   api,
   CurrentSnapshot,
@@ -28,11 +29,6 @@ import {
   WeekendComparison,
   WEEKDAY_NAMES,
 } from "@/lib/api";
-
-function fmtTs(iso: string | null | undefined): string {
-  if (!iso) return "";
-  return new Date(iso.endsWith("Z") ? iso : iso + "Z").toLocaleString();
-}
 
 export default function ItemDetailClient({ itemId }: { itemId: number }) {
   const router = useRouter();

@@ -11,6 +11,7 @@ import {
   VendorAlias,
 } from "@/lib/api";
 import Badge from "@/components/Badge";
+import { fmtTs } from "@/lib/utils";
 
 export default function MySalesPage() {
   const [aliases, setAliases] = useState<VendorAlias[]>([]);
@@ -97,8 +98,12 @@ export default function MySalesPage() {
   }
 
   async function handleRemoveAlias(id: number) {
-    await api.deleteVendorAlias(id);
-    refreshAliases();
+    try {
+      await api.deleteVendorAlias(id);
+      refreshAliases();
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function handleSetCost(e: React.FormEvent) {
@@ -326,12 +331,12 @@ export default function MySalesPage() {
                   <td className="px-3 py-2 font-medium">{s.item_name}</td>
                   <td className="px-3 py-2">{s.seller_name}</td>
                   <td className="px-3 py-2">{s.map_name}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{s.window_start.replace("T", " ")}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{fmtTs(s.window_start)}</td>
                   <td className="px-3 py-2">{s.total_quantity_sold} / {s.initial_quantity}</td>
                   <td className="px-3 py-2">{Math.round(s.revenue).toLocaleString()}</td>
                   <td className="px-3 py-2">{s.profit != null ? Math.round(s.profit).toLocaleString() : "—"}</td>
                   <td className="px-3 py-2">
-                    <Badge variant={statusVariants[s.status] || "neutral"}>{s.status.replace("_", " ")}</Badge>
+                    <Badge variant={statusVariants[s.status] || "neutral"}>{s.status.replaceAll("_", " ")}</Badge>
                     {s.dismissed && (
                       <span className="ml-1 inline-block">
                         <Badge variant="danger">removed</Badge>
