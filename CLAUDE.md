@@ -7,9 +7,9 @@
 - ragwatch installs individual modules (playwright_provider, discord_notifier, etc.) — **not** a `ragwatch` package. Install from repo root: `pip install -e .`
 
 ## Deployment target: AWS EC2
-- Instance: t4g.small (ARM/aarch64), Ubuntu 22.04, sa-east-1, instance ID `i-017131ef240e4bee9`
+- Instance: t4g.small (ARM/aarch64), Ubuntu 22.04, sa-east-1, instance ID `i-068ee0908091de06e`
 - **The public IP changes on every stop/start** — always look it up before SSH:
-  `AWS_PROFILE=market-intel aws ec2 describe-instances --region sa-east-1 --instance-ids i-017131ef240e4bee9 --query "Reservations[0].Instances[0].PublicIpAddress" --output text`
+  `AWS_PROFILE=market-intel aws ec2 describe-instances --region sa-east-1 --instance-ids i-068ee0908091de06e --query "Reservations[0].Instances[0].PublicIpAddress" --output text`
 - AWS credentials: use profile `market-intel` (in `~/.aws/credentials`)
 - SSH: `ssh -i ~/.ssh/oracle_market_intel ubuntu@<current-ip>`
 - Repo lives at `/home/ubuntu/Rag`; venv at `/home/ubuntu/Rag/.venv`
