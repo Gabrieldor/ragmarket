@@ -110,6 +110,9 @@ class MapStatOut(BaseModel):
     # out (pending) rather than guessed at. See analytics.py:_compute_sold_deltas.
     estimated_units_sold: int
     avg_sale_price: float | None  # quantity-weighted avg price across inferred sale events; null if no sales
+    current_quantity: int         # sum of qty in the most recent scrape for this map (current stock)
+    current_listing_count: int    # number of listings in the most recent scrape for this map
+    today_units_sold: int         # units sold today (since midnight local time)
 
 
 class HourOfDayStatOut(BaseModel):
@@ -129,8 +132,8 @@ class SalesByHourOut(BaseModel):
     """See MapStatOut.estimated_units_sold -- same inference method and same caveat."""
 
     hour: int
-    estimated_units_sold: int
-    sale_events: int
+    estimated_units_sold: float  # average daily units sold at this hour (not cumulative)
+    sale_events: int             # number of days that had sales at this hour
     avg_sale_price: float | None  # quantity-weighted avg price; null if no priced sale events
 
 
@@ -141,7 +144,7 @@ class SalesByHourMapOut(BaseModel):
 
     map_name: str
     hour: int
-    estimated_units_sold: int
+    estimated_units_sold: float  # average daily units sold at this (map, hour)
 
 
 class MapAliasOut(BaseModel):

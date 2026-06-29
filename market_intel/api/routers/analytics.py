@@ -1,6 +1,6 @@
 import statistics
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -206,7 +206,10 @@ def map_analysis(
     end: date | None = None,
     db: Session = Depends(get_db),
 ):
-    """Price-by-map comparison, aggregated across the date range."""
+    """Price-by-map comparison. Historical metrics (avg_price, stddev, est_units_sold)
+    are aggregated across the date range; current_quantity and today_units_sold are always
+    pinned to the present regardless of the date filter.
+    """
     stmt = select(MapStat).where(MapStat.tracked_item_id == item_id)
     if start is not None:
         stmt = stmt.where(MapStat.period_start >= start.isoformat())
@@ -220,9 +223,10 @@ def map_analysis(
         raw_name = row.map_name or "unknown"
         buckets[alias_lookup.get(raw_name, raw_name)].append(row)
 
+    # Historical: all-time sale events within the date filter
     sold_by_map: dict[str, int] = defaultdict(int)
-    sale_price_num_by_map: dict[str, float] = defaultdict(float)  # sum(price * qty)
-    sale_price_den_by_map: dict[str, int] = defaultdict(int)      # sum(qty) for priced events
+    sale_price_num_by_map: dict[str, float] = defaultdict(float)
+    sale_price_den_by_map: dict[str, int] = defaultdict(int)
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         raw_name = event.map_name or "unknown"
         canonical = alias_lookup.get(raw_name, raw_name)
@@ -230,6 +234,43 @@ def map_analysis(
         if event.price is not None:
             sale_price_num_by_map[canonical] += event.price * event.quantity_sold
             sale_price_den_by_map[canonical] += event.quantity_sold
+
+    # Current quantity + listing count: from the most recent scrape per map (ignores date filter)
+    current_qty_by_map: dict[str, int] = defaultdict(int)
+    current_listings_by_map: dict[str, int] = defaultdict(int)
+    latest_at = db.scalar(
+        select(ListingObservation.observed_at)
+        .where(
+            ListingObservation.tracked_item_id == item_id,
+            ListingObservation.is_outlier.is_(False),
+        )
+        .order_by(ListingObservation.observed_at.desc())
+        .limit(1)
+    )
+    if latest_at is not None:
+        for obs in db.scalars(
+            select(ListingObservation).where(
+                ListingObservation.tracked_item_id == item_id,
+                ListingObservation.observed_at == latest_at,
+                ListingObservation.is_outlier.is_(False),
+            )
+        ):
+            raw_name = obs.map_name or "unknown"
+            canonical = alias_lookup.get(raw_name, raw_name)
+            current_qty_by_map[canonical] += obs.quantity
+            current_listings_by_map[canonical] += 1
+
+    # Today's units sold: sale events since midnight local time (ignores date filter)
+    today_sold_by_map: dict[str, int] = defaultdict(int)
+    today_start = datetime.combine(date.today(), datetime.min.time())
+    for event in db.scalars(
+        select(SaleEvent).where(
+            SaleEvent.tracked_item_id == item_id,
+            SaleEvent.sale_attributed_at >= today_start,
+        )
+    ):
+        raw_name = event.map_name or "unknown"
+        today_sold_by_map[alias_lookup.get(raw_name, raw_name)] += event.quantity_sold
 
     results = []
     for map_name, group in sorted(buckets.items(), key=lambda kv: -sum(r.listing_count for r in kv[1])):
@@ -239,9 +280,6 @@ def map_analysis(
             if total_listings
             else 0.0
         )
-        # Pooled variance across the per-day rows in this group: each day contributes its own
-        # within-day variance plus the squared deviation of its mean from the combined mean,
-        # weighted by listing_count -- correct for combining grouped stats without raw prices.
         if total_listings:
             pooled_variance = sum(
                 r.listing_count * (r.stddev_price ** 2 + (r.avg_price - weighted_avg) ** 2)
@@ -263,6 +301,9 @@ def map_analysis(
                 stddev_price=pooled_variance ** 0.5,
                 estimated_units_sold=sold_by_map.get(map_name, 0),
                 avg_sale_price=avg_sale_price,
+                current_quantity=current_qty_by_map.get(map_name, 0),
+                current_listing_count=current_listings_by_map.get(map_name, 0),
+                today_units_sold=today_sold_by_map.get(map_name, 0),
             )
         )
     return results
@@ -316,26 +357,36 @@ def sales_by_hour(
     end: date | None = None,
     db: Session = Depends(get_db),
 ):
-    """Estimated units sold by hour-of-day. See MapStatOut.estimated_units_sold for the
-    inference method and its caveat (minimum-bound estimate, see sales_inference.py).
+    """Average estimated units sold per hour-of-day across all days in the range.
+
+    Groups sale events by (date, hour) first to get per-day totals, then averages
+    those daily totals per hour -- so '1 AM' shows the mean of each day's 1 AM
+    sales rather than an ever-growing cumulative sum.
     """
-    buckets: dict[int, dict] = defaultdict(lambda: {"sold": 0, "events": 0, "price_num": 0.0, "price_den": 0})
+    # Per-day totals: (date, hour) → {sold, price_num, price_den}
+    daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0, "price_num": 0.0, "price_den": 0})
     for event in db.scalars(_sale_events_query(item_id, start, end)):
-        bucket = buckets[event.sale_attributed_at.hour]
-        bucket["sold"] += event.quantity_sold
-        bucket["events"] += 1
+        key = (event.sale_attributed_at.date(), event.sale_attributed_at.hour)
+        daily[key]["sold"] += event.quantity_sold
         if event.price is not None:
-            bucket["price_num"] += event.price * event.quantity_sold
-            bucket["price_den"] += event.quantity_sold
+            daily[key]["price_num"] += event.price * event.quantity_sold
+            daily[key]["price_den"] += event.quantity_sold
+
+    # Average across days per hour
+    hourly: dict[int, dict] = defaultdict(lambda: {"sold_values": [], "price_num": 0.0, "price_den": 0})
+    for (_, hour), vals in daily.items():
+        hourly[hour]["sold_values"].append(vals["sold"])
+        hourly[hour]["price_num"] += vals["price_num"]
+        hourly[hour]["price_den"] += vals["price_den"]
 
     return [
         SalesByHourOut(
             hour=hour,
-            estimated_units_sold=b["sold"],
-            sale_events=b["events"],
+            estimated_units_sold=statistics.mean(b["sold_values"]),
+            sale_events=len(b["sold_values"]),
             avg_sale_price=b["price_num"] / b["price_den"] if b["price_den"] else None,
         )
-        for hour, b in sorted(buckets.items())
+        for hour, b in sorted(hourly.items())
     ]
 
 
@@ -346,20 +397,30 @@ def sales_by_hour_by_map(
     end: date | None = None,
     db: Session = Depends(get_db),
 ):
-    """Same estimated-units-sold inference as /sales-by-hour, broken down per map -- lets
-    the user compare *when* an item sells fastest at each shop location, not just overall.
+    """Average estimated units sold per (map, hour-of-day) across all days in the range.
+
+    Same averaging approach as /sales-by-hour: groups by (map, hour, date) first to get
+    daily totals, then averages those per (map, hour).
     """
     alias_lookup = get_map_alias_lookup(db)
-    buckets: dict[tuple[str, int], int] = defaultdict(int)
+
+    # Per-day totals: (map, hour, date) → qty
+    daily: dict[tuple, int] = defaultdict(int)
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         if not event.map_name:
             continue
-        canonical_name = alias_lookup.get(event.map_name, event.map_name)
-        buckets[(canonical_name, event.sale_attributed_at.hour)] += event.quantity_sold
+        canonical = alias_lookup.get(event.map_name, event.map_name)
+        key = (canonical, event.sale_attributed_at.hour, event.sale_attributed_at.date())
+        daily[key] += event.quantity_sold
+
+    # Average across days per (map, hour)
+    map_hour: dict[tuple[str, int], list[int]] = defaultdict(list)
+    for (map_name, hour, _), qty in daily.items():
+        map_hour[(map_name, hour)].append(qty)
 
     return [
-        SalesByHourMapOut(map_name=map_name, hour=hour, estimated_units_sold=qty)
-        for (map_name, hour), qty in sorted(buckets.items())
+        SalesByHourMapOut(map_name=name, hour=hour, estimated_units_sold=statistics.mean(vals))
+        for (name, hour), vals in sorted(map_hour.items())
     ]
 
 

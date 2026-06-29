@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import { api, MapStat, Observation, SalesByHourMap, TrackedItem } from "@/lib/api";
 
-type SortKey = "listing_count" | "avg_price" | "total_quantity" | "estimated_units_sold";
+type SortKey = "listing_count" | "avg_price" | "current_quantity" | "today_units_sold";
 
 const MAP_COLORS = [
   "#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#ea580c",
@@ -249,10 +249,9 @@ export default function MapAnalysisPage() {
 
       <div>
         <h2 className="text-sm font-semibold text-foreground mb-2">
-          Estimated units sold by hour of day, per map
+          Avg estimated units sold by hour of day, per map
           <span className="text-muted-foreground font-normal text-xs ml-2">
-            (same inference as item detail's sales-by-hour chart, broken down by shop
-            location -- see Sellout Audit for the method's caveats)
+            (average across days with sales at that hour, broken down by shop location)
           </span>
         </h2>
         <div className="h-72 border border-border rounded p-2">
@@ -261,7 +260,7 @@ export default function MapAnalysisPage() {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} />
-              <Tooltip />
+              <Tooltip formatter={(v: number) => v.toFixed(1)} />
               <Legend />
               {mapNames.map((name) => (
                 <Bar key={name} dataKey={name} stackId="sold" fill={mapColor(name)} />
@@ -281,8 +280,8 @@ export default function MapAnalysisPage() {
               <th className="px-3 py-2">Map</th>
               <SortableHeader label="Avg price (± stddev)" sortKey="avg_price" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <SortableHeader label="Listings" sortKey="listing_count" current={sortKey} dir={sortDir} onClick={toggleSort} />
-              <SortableHeader label="Qty" sortKey="total_quantity" current={sortKey} dir={sortDir} onClick={toggleSort} />
-              <SortableHeader label="Est. units sold" sortKey="estimated_units_sold" current={sortKey} dir={sortDir} onClick={toggleSort} />
+              <SortableHeader label="Qty (now)" sortKey="current_quantity" current={sortKey} dir={sortDir} onClick={toggleSort} />
+              <SortableHeader label="Est. sold (today)" sortKey="today_units_sold" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <th className="px-3 py-2">Avg sale price</th>
               <th className="px-3 py-2">Period</th>
               <th className="px-3 py-2"></th>
@@ -297,9 +296,9 @@ export default function MapAnalysisPage() {
                     {Math.round(m.avg_price)}
                     <span className="text-muted-foreground"> ± {Math.round(m.stddev_price)}</span>
                   </td>
-                  <td className="px-3 py-2">{m.listing_count}</td>
-                  <td className="px-3 py-2">{m.total_quantity}</td>
-                  <td className="px-3 py-2">{m.estimated_units_sold}</td>
+                  <td className="px-3 py-2">{m.current_listing_count}</td>
+                  <td className="px-3 py-2">{m.current_quantity}</td>
+                  <td className="px-3 py-2">{m.today_units_sold}</td>
                   <td className="px-3 py-2">
                     {m.avg_sale_price != null ? Math.round(m.avg_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
                   </td>

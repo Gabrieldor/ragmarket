@@ -78,6 +78,9 @@ export type MapStat = {
   stddev_price: number;
   estimated_units_sold: number;
   avg_sale_price: number | null;
+  current_quantity: number;       // qty from latest scrape (current stock)
+  current_listing_count: number;  // listing count from latest scrape
+  today_units_sold: number;       // units sold since midnight
 };
 
 export type SalesByHour = {

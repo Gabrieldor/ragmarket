@@ -192,10 +192,10 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
 
       <section>
         <h2 className="text-sm font-semibold text-foreground mb-2">
-          Estimated units sold by hour of day
+          Avg estimated units sold by hour of day
           <span className="text-muted-foreground font-normal text-xs ml-2">
-            (inferred from quantity drops and confirmed sellouts -- corrects for the same
-            seller relisting leftover stock under a new shop)
+            (average across all days with sales at that hour — inferred from quantity drops
+            and confirmed sellouts)
           </span>
         </h2>
         <div className="h-64 border border-border rounded p-2">
@@ -204,8 +204,8 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} />
-              <Tooltip />
-              <Bar dataKey="estimated_units_sold" fill="var(--color-accent)" name="Est. units sold" />
+              <Tooltip formatter={(v: number) => v.toFixed(1)} />
+              <Bar dataKey="estimated_units_sold" fill="var(--color-accent)" name="Avg est. units sold" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -274,8 +274,8 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <th className="px-3 py-2">Map</th>
               <th className="px-3 py-2">Avg price</th>
               <th className="px-3 py-2">Listings</th>
-              <th className="px-3 py-2">Qty</th>
-              <th className="px-3 py-2">Est. units sold</th>
+              <th className="px-3 py-2">Qty (now)</th>
+              <th className="px-3 py-2">Est. sold (today)</th>
               <th className="px-3 py-2">Avg sale price</th>
             </tr>
           </thead>
@@ -284,9 +284,9 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <tr key={m.map_name} className="border-t border-border hover:bg-muted/50">
                 <td className="px-3 py-2 font-medium">{m.map_name}</td>
                 <td className="px-3 py-2">{Math.round(m.avg_price)}</td>
-                <td className="px-3 py-2">{m.listing_count}</td>
-                <td className="px-3 py-2">{m.total_quantity}</td>
-                <td className="px-3 py-2">{m.estimated_units_sold}</td>
+                <td className="px-3 py-2">{m.current_listing_count}</td>
+                <td className="px-3 py-2">{m.current_quantity}</td>
+                <td className="px-3 py-2">{m.today_units_sold}</td>
                 <td className="px-3 py-2">
                   {m.avg_sale_price != null ? Math.round(m.avg_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
                 </td>
