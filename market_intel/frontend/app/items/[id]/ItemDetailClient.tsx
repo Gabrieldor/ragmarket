@@ -204,7 +204,8 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} />
-              <Tooltip formatter={(v: unknown) => (typeof v === "number" ? v.toFixed(1) : v)} />
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              <Tooltip formatter={(v: any) => (typeof v === "number" ? v.toFixed(1) : v)} />
               <Bar dataKey="estimated_units_sold" fill="var(--color-accent)" name="Avg est. units sold" />
             </BarChart>
           </ResponsiveContainer>
