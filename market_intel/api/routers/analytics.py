@@ -1,6 +1,6 @@
 import statistics
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -238,6 +238,8 @@ def map_analysis(
     # Current quantity + listing count: from the most recent scrape per map (ignores date filter)
     current_qty_by_map: dict[str, int] = defaultdict(int)
     current_listings_by_map: dict[str, int] = defaultdict(int)
+    current_prices_by_map: dict[str, list[int]] = defaultdict(list)
+    current_raw_names_by_canonical: dict[str, set[str]] = defaultdict(set)
     latest_at = db.scalar(
         select(ListingObservation.observed_at)
         .where(
@@ -259,10 +261,14 @@ def map_analysis(
             canonical = alias_lookup.get(raw_name, raw_name)
             current_qty_by_map[canonical] += obs.quantity
             current_listings_by_map[canonical] += 1
+            current_prices_by_map[canonical].append(obs.price)
+            current_raw_names_by_canonical[canonical].add(raw_name)
 
-    # Today's units sold: sale events since midnight local time (ignores date filter)
+    # Today's units sold: sale events since midnight Brazil time (UTC-3), ignores date filter
+    _tz_brazil = timezone(timedelta(hours=-3))
+    _today_brazil = datetime.now(_tz_brazil).date()
+    today_start = datetime.combine(_today_brazil, datetime.min.time()) + timedelta(hours=3)
     today_sold_by_map: dict[str, int] = defaultdict(int)
-    today_start = datetime.combine(date.today(), datetime.min.time())
     for event in db.scalars(
         select(SaleEvent).where(
             SaleEvent.tracked_item_id == item_id,
@@ -306,6 +312,34 @@ def map_analysis(
                 today_units_sold=today_sold_by_map.get(map_name, 0),
             )
         )
+
+    # Fallback: maps visible in the current scrape or today's sales but with no MapStat
+    # rows yet (rollup hasn't run since the item was added, or all observations had NULL
+    # map_name until recently). Show current data so the table is never empty while live.
+    today_iso = _today_brazil.isoformat()
+    for map_name in sorted(set(current_qty_by_map) | set(today_sold_by_map)):
+        if map_name in buckets:
+            continue
+        prices = current_prices_by_map.get(map_name, [])
+        den = sale_price_den_by_map.get(map_name, 0)
+        results.append(
+            MapStatOut(
+                map_name=map_name,
+                raw_map_names=sorted(current_raw_names_by_canonical.get(map_name, {map_name})),
+                period_start=today_iso,
+                period_end=today_iso,
+                avg_price=sum(prices) / len(prices) if prices else 0.0,
+                listing_count=0,
+                total_quantity=0,
+                stddev_price=statistics.pstdev(prices) if len(prices) > 1 else 0.0,
+                estimated_units_sold=sold_by_map.get(map_name, 0),
+                avg_sale_price=sale_price_num_by_map[map_name] / den if den else None,
+                current_quantity=current_qty_by_map.get(map_name, 0),
+                current_listing_count=current_listings_by_map.get(map_name, 0),
+                today_units_sold=today_sold_by_map.get(map_name, 0),
+            )
+        )
+
     return results
 
 

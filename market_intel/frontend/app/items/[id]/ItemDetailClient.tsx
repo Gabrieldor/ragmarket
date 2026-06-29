@@ -29,6 +29,11 @@ import {
   WEEKDAY_NAMES,
 } from "@/lib/api";
 
+function fmtTs(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return new Date(iso.endsWith("Z") ? iso : iso + "Z").toLocaleString();
+}
+
 export default function ItemDetailClient({ itemId }: { itemId: number }) {
   const router = useRouter();
   const [items, setItems] = useState<TrackedItem[]>([]);
@@ -109,7 +114,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
           {snapshot?.observed_at && (
             <span className="text-muted-foreground font-normal">
               {" "}
-              (as of {snapshot.observed_at.replace("T", " ")})
+              (as of {fmtTs(snapshot.observed_at)})
             </span>
           )}
         </h2>
@@ -338,7 +343,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <tbody>
                 {soldOutEvents.map((e) => (
                   <tr key={e.id} className="border-t border-border hover:bg-muted/50">
-                    <td className="px-3 py-2 text-muted-foreground">{e.triggered_at.replace("T", " ")}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{fmtTs(e.triggered_at)}</td>
                     <td className="px-3 py-2">{e.seller_name}</td>
                     <td className="px-3 py-2">{e.map_name}</td>
                     <td className="px-3 py-2">{e.baseline_quantity}</td>
