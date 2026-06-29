@@ -8,7 +8,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "market_intel.db"
+DB_PATH = Path(__file__).parent / "market_intel.db"
 IMDS = "http://169.254.169.254/latest"
 
 
