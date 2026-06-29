@@ -398,9 +398,11 @@ def sales_by_hour(
     sales rather than an ever-growing cumulative sum.
     """
     # Per-day totals: (date, hour) → {sold, price_num, price_den}
+    # Use Brazil local time so the chart shows hours meaningful to the user.
     daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0, "price_num": 0.0, "price_den": 0})
     for event in db.scalars(_sale_events_query(item_id, start, end)):
-        key = (event.sale_attributed_at.date(), event.sale_attributed_at.hour)
+        brt = event.sale_attributed_at - timedelta(hours=3)
+        key = (brt.date(), brt.hour)
         daily[key]["sold"] += event.quantity_sold
         if event.price is not None:
             daily[key]["price_num"] += event.price * event.quantity_sold
@@ -438,13 +440,14 @@ def sales_by_hour_by_map(
     """
     alias_lookup = get_map_alias_lookup(db)
 
-    # Per-day totals: (map, hour, date) → qty
+    # Per-day totals: (map, hour, date) → qty  — Brazil local time for the hour bucket
     daily: dict[tuple, int] = defaultdict(int)
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         if not event.map_name:
             continue
         canonical = alias_lookup.get(event.map_name, event.map_name)
-        key = (canonical, event.sale_attributed_at.hour, event.sale_attributed_at.date())
+        brt = event.sale_attributed_at - timedelta(hours=3)
+        key = (canonical, brt.hour, brt.date())
         daily[key] += event.quantity_sold
 
     # Average across days per (map, hour)
