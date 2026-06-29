@@ -17,10 +17,11 @@ const TICK_MS = 1000;
 
 function parseLocal(iso: string | null): Date | null {
   if (!iso) return null;
-  // Backend timestamps are naive *local* time (datetime.now(), not UTC -- see the
-  // convention documented in db/models.py), so parse as-is: no "Z" suffix, which would
-  // tell the browser to treat it as UTC and shift it by the local offset on display.
-  return new Date(iso);
+  // Backend timestamps come from datetime.now() on a UTC server, so they are UTC
+  // even though they carry no timezone suffix. Append "Z" so the browser treats
+  // them as UTC rather than local time (which would show a wrong offset for non-UTC users).
+  const utc = iso.endsWith("Z") ? iso : iso + "Z";
+  return new Date(utc);
 }
 
 function formatTime(iso: string | null): string {
