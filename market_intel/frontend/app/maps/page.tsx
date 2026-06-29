@@ -260,7 +260,7 @@ export default function MapAnalysisPage() {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} />
-              <Tooltip formatter={(v: number) => v.toFixed(1)} />
+              <Tooltip formatter={(v: unknown) => (typeof v === "number" ? v.toFixed(1) : v)} />
               <Legend />
               {mapNames.map((name) => (
                 <Bar key={name} dataKey={name} stackId="sold" fill={mapColor(name)} />
