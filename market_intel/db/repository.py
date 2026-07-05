@@ -467,6 +467,28 @@ def get_active_sold_out_counts(session: Session) -> dict[int, int]:
     return dict(counts)
 
 
+def get_latest_observations(session: Session, tracked_item_id: int) -> list[ListingObservation]:
+    """All ListingObservation rows from a tracked item's most recent scrape cycle
+    (max ``observed_at``). Used by map-only watch rules (notifications/checker.py) to check
+    price+map conditions against already-collected data instead of re-scraping live.
+    """
+    latest_at = session.scalar(
+        select(func.max(ListingObservation.observed_at)).where(
+            ListingObservation.tracked_item_id == tracked_item_id
+        )
+    )
+    if latest_at is None:
+        return []
+    return list(
+        session.scalars(
+            select(ListingObservation).where(
+                ListingObservation.tracked_item_id == tracked_item_id,
+                ListingObservation.observed_at == latest_at,
+            )
+        )
+    )
+
+
 # ── Watch rules / notifications -- ported price watcher, see notifications/ ───
 
 def list_watch_rules(session: Session, *, active_only: bool = False) -> list[WatchRule]:
@@ -479,6 +501,7 @@ def list_watch_rules(session: Session, *, active_only: bool = False) -> list[Wat
 def add_watch_rule(
     session: Session, *, raw: str, item_name: str, operator: str, target_price: int,
     required_refine: int | None = None, required_slot: int | None = None,
+    required_map: str | None = None,
 ) -> WatchRule:
     existing = session.scalar(select(WatchRule).where(WatchRule.raw == raw))
     if existing is not None:
@@ -486,10 +509,25 @@ def add_watch_rule(
     rule = WatchRule(
         raw=raw, item_name=item_name, operator=operator, target_price=target_price,
         required_refine=required_refine, required_slot=required_slot,
+        required_map=required_map,
     )
     session.add(rule)
     session.flush()
     return rule
+
+
+def find_tracked_item_by_name(session: Session, item_name: str) -> TrackedItem | None:
+    """Case-insensitive lookup of a TrackedItem by ``item_name`` or ``display_name``. Used
+    to validate/resolve map-filtered watch rules, since map data is only ever collected for
+    actively tracked items (see notifications/checker.py's map-only rule path).
+    """
+    needle = item_name.strip().lower()
+    return session.scalar(
+        select(TrackedItem).where(
+            (func.lower(TrackedItem.item_name) == needle)
+            | (func.lower(TrackedItem.display_name) == needle)
+        )
+    )
 
 
 def set_watch_rule_active(session: Session, rule_id: int, is_active: bool) -> WatchRule:

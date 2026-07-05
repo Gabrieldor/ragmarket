@@ -355,6 +355,7 @@ class WatchRule(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     required_refine: Mapped[int | None] = mapped_column(Integer, nullable=True)
     required_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    required_map: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now

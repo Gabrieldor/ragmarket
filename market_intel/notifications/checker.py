@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import NotificationEvent, NotificationSettings, WatchRule
+from db.repository import find_tracked_item_by_name, get_latest_observations, get_map_alias_lookup
 from scraper_adapter.location_action import parse_item_name_title
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,42 @@ def _bounds(target_price: int, variance_percent: float) -> tuple[int, int]:
     """Return (lower_bound, upper_bound) after applying variance."""
     variance = target_price * (variance_percent / 100)
     return int(target_price - variance), int(target_price + variance)
+
+
+def _canonical_map(map_name: str | None, alias_lookup_ci: dict[str, str]) -> str | None:
+    """Resolves a raw map name to its canonical form (case-insensitively looked up in
+    ``alias_lookup_ci``, which must already have lowercase keys), then lowercases the
+    result so two differently-cased references to the same map compare equal.
+    """
+    if not map_name:
+        return None
+    return alias_lookup_ci.get(map_name.lower(), map_name).lower()
+
+
+def _fetch_map_filtered_listings(
+    rule: WatchRule,
+    session: Session,
+    alias_lookup_ci: dict[str, str],
+) -> list:
+    """Map-only rules (``required_map`` set, no refine/slot) never hit the live site --
+    map data only exists in the DB for actively tracked items (populated by the regular
+    tracked-item scrape cycle), so this reads the rule's resolved TrackedItem's most recent
+    scrape run's observations instead, filtered down to the ones on the required map.
+    """
+    tracked_item = find_tracked_item_by_name(session, rule.item_name)
+    if tracked_item is None:
+        logger.warning(
+            "[%s] required_map set but '%s' is no longer a tracked item -- skipping.",
+            rule.raw, rule.item_name,
+        )
+        return []
+
+    observations = get_latest_observations(session, tracked_item.id)
+    target_map = _canonical_map(rule.required_map, alias_lookup_ci)
+    return [
+        obs for obs in observations
+        if _canonical_map(obs.map_name, alias_lookup_ci) == target_map
+    ]
 
 
 def evaluate_rule(
@@ -84,12 +121,17 @@ async def _fetch_refine_slot_matched_listings(
     rule: WatchRule,
     provider,
     config: NotificationSettings,
+    alias_lookup_ci: dict[str, str],
 ) -> list:
     """Re-scrape ``rule``'s listings through their shop-location modal to verify the
     actual refine level / slot count, keeping only listings matching
     ``rule.required_refine``/``rule.required_slot``. Only called when at least one of
     those is set on the rule -- rules without them never pay this cost (see
     ``check_watch_rules``).
+
+    If ``rule.required_map`` is also set, the modal's ``location.map_name`` (already being
+    fetched anyway for the refine/slot check, so this is free) is canonicalized the same
+    way and must match too, or the candidate is rejected.
 
     Requires ``provider.scrape_item()`` (``DetailedListingProvider`` -- carries
     ``dom_index`` so a matching card can be clicked). Candidates are limited to listings
@@ -136,6 +178,11 @@ async def _fetch_refine_slot_matched_listings(
             continue
         if rule.required_slot is not None and actual_slot != rule.required_slot:
             continue
+        if rule.required_map is not None:
+            actual_map = _canonical_map(location.map_name, alias_lookup_ci)
+            target_map = _canonical_map(rule.required_map, alias_lookup_ci)
+            if actual_map != target_map:
+                continue
         matched.append(listing)
 
     return matched
@@ -154,13 +201,21 @@ async def check_watch_rules(
     """
     rules = list(session.scalars(select(WatchRule).where(WatchRule.is_active.is_(True))))
     fired = 0
+    alias_lookup_ci = {raw.lower(): canonical for raw, canonical in get_map_alias_lookup(session).items()}
 
     for index, rule in enumerate(rules):
         if index > 0:
             await asyncio.sleep(config.rule_delay_seconds)
 
-        if rule.required_refine is not None or rule.required_slot is not None:
-            listings = await _fetch_refine_slot_matched_listings(rule, provider, config)
+        map_only = (
+            rule.required_map is not None
+            and rule.required_refine is None
+            and rule.required_slot is None
+        )
+        if map_only:
+            listings = _fetch_map_filtered_listings(rule, session, alias_lookup_ci)
+        elif rule.required_refine is not None or rule.required_slot is not None:
+            listings = await _fetch_refine_slot_matched_listings(rule, provider, config, alias_lookup_ci)
         else:
             listings = await provider.get_listings(
                 item_name=rule.item_name,
