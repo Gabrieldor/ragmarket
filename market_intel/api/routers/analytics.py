@@ -2,7 +2,7 @@ import statistics
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -724,8 +724,8 @@ def _brazil_window(target_date: date, hour: int | None) -> tuple[datetime, datet
 
 def _map_counts(counts: dict[str, int]) -> list[MapCountOut]:
     return [
-        MapCountOut(map_name=map_name, count=count)
-        for map_name, count in sorted(counts.items(), key=lambda kv: -kv[1])
+        MapCountOut(map_name=map_name, quantity=quantity)
+        for map_name, quantity in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
 
 
@@ -734,16 +734,29 @@ def threshold_breakdown(
     item_id: int,
     date: date = Query(...),
     hour: int | None = Query(default=None, ge=0, le=23),
-    avail_op: str = Query(...),
-    avail_price: float = Query(...),
-    sold_op: str = Query(...),
-    sold_price: float = Query(...),
+    avail_op: str | None = Query(default=None),
+    avail_price: float | None = Query(default=None),
+    sold_op: str | None = Query(default=None),
+    sold_price: float | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     """Counts of listings/sales above or below a given price threshold within a date (and
     optional hour) window, broken down by canonical map name -- for the data-analysis page's
     threshold exploration view.
+
+    At least one of `avail_price` / `sold_price` must be provided; the other side is simply
+    omitted (returned as `None`) if its price is not given.
     """
+    if avail_price is None and sold_price is None:
+        raise HTTPException(
+            status_code=400,
+            detail="at least one of avail_price or sold_price is required",
+        )
+    if avail_price is not None and avail_op is None:
+        avail_op = "above"
+    if sold_price is not None and sold_op is None:
+        sold_op = "above"
+
     start, end = _brazil_window(date, hour)
     alias_lookup = get_map_alias_lookup(db)
 
@@ -754,39 +767,44 @@ def threshold_breakdown(
             return value < threshold
         raise ValueError(f"invalid op: {op!r}")
 
-    available_by_map: dict[str, int] = defaultdict(int)
-    available_total = 0
-    for obs in db.scalars(
-        select(ListingObservation).where(
-            ListingObservation.tracked_item_id == item_id,
-            ListingObservation.observed_at >= start,
-            ListingObservation.observed_at < end,
-        )
-    ):
-        if not _cmp(avail_op, obs.price, avail_price):
-            continue
-        raw_name = obs.map_name or "unknown"
-        canonical = alias_lookup.get(raw_name, raw_name)
-        available_by_map[canonical] += 1
-        available_total += 1
+    available_side: ThresholdSideOut | None = None
+    if avail_price is not None:
+        available_by_map: dict[str, int] = defaultdict(int)
+        available_total = 0
+        for obs in db.scalars(
+            select(ListingObservation).where(
+                ListingObservation.tracked_item_id == item_id,
+                ListingObservation.observed_at >= start,
+                ListingObservation.observed_at < end,
+            )
+        ):
+            if not _cmp(avail_op, obs.price, avail_price):
+                continue
+            raw_name = obs.map_name or "unknown"
+            canonical = alias_lookup.get(raw_name, raw_name)
+            quantity = obs.quantity or 0
+            available_by_map[canonical] += quantity
+            available_total += quantity
+        available_side = ThresholdSideOut(total=available_total, by_map=_map_counts(available_by_map))
 
-    sold_by_map: dict[str, int] = defaultdict(int)
-    sold_total = 0
-    for event in db.scalars(
-        select(SaleEvent).where(
-            SaleEvent.tracked_item_id == item_id,
-            SaleEvent.sale_attributed_at >= start,
-            SaleEvent.sale_attributed_at < end,
-        )
-    ):
-        if event.price is None or not _cmp(sold_op, event.price, sold_price):
-            continue
-        raw_name = event.map_name or "unknown"
-        canonical = alias_lookup.get(raw_name, raw_name)
-        sold_by_map[canonical] += 1
-        sold_total += 1
+    sold_side: ThresholdSideOut | None = None
+    if sold_price is not None:
+        sold_by_map: dict[str, int] = defaultdict(int)
+        sold_total = 0
+        for event in db.scalars(
+            select(SaleEvent).where(
+                SaleEvent.tracked_item_id == item_id,
+                SaleEvent.sale_attributed_at >= start,
+                SaleEvent.sale_attributed_at < end,
+            )
+        ):
+            if event.price is None or not _cmp(sold_op, event.price, sold_price):
+                continue
+            raw_name = event.map_name or "unknown"
+            canonical = alias_lookup.get(raw_name, raw_name)
+            quantity = event.quantity_sold or 0
+            sold_by_map[canonical] += quantity
+            sold_total += quantity
+        sold_side = ThresholdSideOut(total=sold_total, by_map=_map_counts(sold_by_map))
 
-    return ThresholdBreakdownOut(
-        available=ThresholdSideOut(total=available_total, by_map=_map_counts(available_by_map)),
-        sold=ThresholdSideOut(total=sold_total, by_map=_map_counts(sold_by_map)),
-    )
+    return ThresholdBreakdownOut(available=available_side, sold=sold_side)

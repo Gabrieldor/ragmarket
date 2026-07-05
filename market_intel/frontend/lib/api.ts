@@ -214,8 +214,8 @@ export type SaleMethodBreakdown = {
 };
 
 export type ThresholdBreakdown = {
-  available: { total: number; by_map: { map_name: string; count: number }[] };
-  sold: { total: number; by_map: { map_name: string; count: number }[] };
+  available: { total: number; by_map: { map_name: string; quantity: number }[] } | null;
+  sold: { total: number; by_map: { map_name: string; quantity: number }[] } | null;
 };
 
 export type MapAlias = {
@@ -366,19 +366,23 @@ export const api = {
     params: {
       date: string;
       hour?: number;
-      avail_op: "above" | "below";
-      avail_price: number;
-      sold_op: "above" | "below";
-      sold_price: number;
+      avail_op?: "above" | "below";
+      avail_price?: number;
+      sold_op?: "above" | "below";
+      sold_price?: number;
     }
   ) => {
     const qs = new URLSearchParams();
     qs.set("date", params.date);
     if (params.hour !== undefined) qs.set("hour", String(params.hour));
-    qs.set("avail_op", params.avail_op);
-    qs.set("avail_price", String(params.avail_price));
-    qs.set("sold_op", params.sold_op);
-    qs.set("sold_price", String(params.sold_price));
+    if (params.avail_price !== undefined) {
+      qs.set("avail_op", params.avail_op ?? "above");
+      qs.set("avail_price", String(params.avail_price));
+    }
+    if (params.sold_price !== undefined) {
+      qs.set("sold_op", params.sold_op ?? "above");
+      qs.set("sold_price", String(params.sold_price));
+    }
     return apiFetch<ThresholdBreakdown>(`/analytics/${itemId}/threshold-breakdown?${qs.toString()}`);
   },
 

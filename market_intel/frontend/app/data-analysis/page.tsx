@@ -38,15 +38,19 @@ export default function DataAnalysisPage() {
     setAvailPriceError(null);
     setSoldPriceError(null);
 
-    const parsedAvailPrice = parsePriceShorthand(availPrice);
-    const parsedSoldPrice = parsePriceShorthand(soldPrice);
+    const parsedAvailPrice = availPrice.trim() === "" ? undefined : parsePriceShorthand(availPrice);
+    const parsedSoldPrice = soldPrice.trim() === "" ? undefined : parsePriceShorthand(soldPrice);
     let hasError = false;
-    if (parsedAvailPrice == null) {
+    if (availPrice.trim() !== "" && parsedAvailPrice == null) {
       setAvailPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
       hasError = true;
     }
-    if (parsedSoldPrice == null) {
+    if (soldPrice.trim() !== "" && parsedSoldPrice == null) {
       setSoldPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
+      hasError = true;
+    }
+    if (availPrice.trim() === "" && soldPrice.trim() === "") {
+      setError("Enter at least one price filter");
       hasError = true;
     }
     if (hasError) return;
@@ -56,10 +60,10 @@ export default function DataAnalysisPage() {
       const data = await api.thresholdBreakdown(selectedId, {
         date,
         hour: hour === "" ? undefined : Number(hour),
-        avail_op: availOp,
-        avail_price: parsedAvailPrice as number,
-        sold_op: soldOp,
-        sold_price: parsedSoldPrice as number,
+        avail_op: parsedAvailPrice != null ? availOp : undefined,
+        avail_price: parsedAvailPrice ?? undefined,
+        sold_op: parsedSoldPrice != null ? soldOp : undefined,
+        sold_price: parsedSoldPrice ?? undefined,
       });
       setResult(data);
     } catch (err) {
@@ -208,10 +212,14 @@ export default function DataAnalysisPage() {
 
       {error && <p className="text-destructive text-sm">{error}</p>}
 
-      {result && (
+      {result && (result.available || result.sold) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ResultTable title="Available" total={result.available.total} byMap={result.available.by_map} />
-          <ResultTable title="Sold" total={result.sold.total} byMap={result.sold.by_map} />
+          {result.available && (
+            <ResultTable title="Available" total={result.available.total} byMap={result.available.by_map} />
+          )}
+          {result.sold && (
+            <ResultTable title="Sold" total={result.sold.total} byMap={result.sold.by_map} />
+          )}
         </div>
       )}
     </div>
@@ -225,27 +233,27 @@ function ResultTable({
 }: {
   title: string;
   total: number;
-  byMap: { map_name: string; count: number }[];
+  byMap: { map_name: string; quantity: number }[];
 }) {
   return (
     <section>
       <h2 className="text-sm font-semibold text-foreground mb-2">
         {title}
-        <span className="text-muted-foreground font-normal text-xs ml-2">total: {total}</span>
+        <span className="text-muted-foreground font-normal text-xs ml-2">Total quantity: {total}</span>
       </h2>
       <div className="overflow-x-auto border border-border rounded">
         <table className="w-full text-sm">
           <thead className="bg-muted text-left sticky top-0">
             <tr>
               <th className="px-3 py-2">Map</th>
-              <th className="px-3 py-2">Count</th>
+              <th className="px-3 py-2">Quantity</th>
             </tr>
           </thead>
           <tbody>
             {byMap.map((row) => (
               <tr key={row.map_name} className="border-t border-border hover:bg-muted/50">
                 <td className="px-3 py-2 font-medium">{row.map_name}</td>
-                <td className="px-3 py-2">{row.count}</td>
+                <td className="px-3 py-2">{row.quantity}</td>
               </tr>
             ))}
           </tbody>

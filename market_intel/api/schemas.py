@@ -436,7 +436,7 @@ class NotificationSettingsUpdate(BaseModel):
 
 class MapCountOut(BaseModel):
     map_name: str
-    count: int
+    quantity: int
 
 
 class ThresholdSideOut(BaseModel):
@@ -445,5 +445,5 @@ class ThresholdSideOut(BaseModel):
 
 
 class ThresholdBreakdownOut(BaseModel):
-    available: ThresholdSideOut
-    sold: ThresholdSideOut
+    available: ThresholdSideOut | None
+    sold: ThresholdSideOut | None
