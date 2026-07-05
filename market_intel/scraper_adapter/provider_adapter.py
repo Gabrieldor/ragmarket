@@ -16,6 +16,7 @@ all without any extra request.
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -90,6 +91,27 @@ _DETAILED_EXTRACT_JS = """
 """
 
 
+_TRAILING_SUFFIX_RE = re.compile(r"\s*(\+\d+|\([^()]*\))$")
+
+
+def _base_search_term(name: str) -> str:
+    """Strip trailing refine (" +7") and parenthetical (" (Capa)") suffixes so the
+    resulting term is safe to send as the site's ``searchWord`` query param -- the site
+    errors on those special-character suffixes. Only trailing occurrences are stripped
+    (repeatedly, so "Item +7 (Capa)" fully reduces to "Item"); words in the middle of the
+    name (e.g. roman numerals like "II") are left untouched.
+
+    This must be used ONLY for building the search URL -- exact-match filtering against
+    scraped card names must keep using the original, unstripped ``name``.
+    """
+    stripped = name
+    while True:
+        new_stripped = _TRAILING_SUFFIX_RE.sub("", stripped)
+        if new_stripped == stripped:
+            return stripped
+        stripped = new_stripped
+
+
 class DetailedListingProvider(PlaywrightProvider):
     """Same lifecycle/navigation as PlaywrightProvider; richer per-card extraction."""
 
@@ -109,7 +131,7 @@ class DetailedListingProvider(PlaywrightProvider):
             f"{BASE_URL}"
             f"?storeType={quote(store_type)}"
             f"&serverType={quote(server_type)}"
-            f"&searchWord={quote(item_name)}"
+            f"&searchWord={quote(_base_search_term(item_name))}"
             f"&sortType={quote(sort)}"
             f"&limit=60"
             f"&p={page_num}"
