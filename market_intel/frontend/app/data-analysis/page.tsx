@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, ThresholdBreakdown, TrackedItem } from "@/lib/api";
+import { api, parsePriceShorthand, ThresholdBreakdown, TrackedItem } from "@/lib/api";
 
 function todayDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -21,6 +21,8 @@ export default function DataAnalysisPage() {
   const [result, setResult] = useState<ThresholdBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [availPriceError, setAvailPriceError] = useState<string | null>(null);
+  const [soldPriceError, setSoldPriceError] = useState<string | null>(null);
 
   useEffect(() => {
     api.listItems().then((list) => {
@@ -33,15 +35,31 @@ export default function DataAnalysisPage() {
     e.preventDefault();
     if (selectedId == null) return;
     setError(null);
+    setAvailPriceError(null);
+    setSoldPriceError(null);
+
+    const parsedAvailPrice = parsePriceShorthand(availPrice);
+    const parsedSoldPrice = parsePriceShorthand(soldPrice);
+    let hasError = false;
+    if (parsedAvailPrice == null) {
+      setAvailPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
+      hasError = true;
+    }
+    if (parsedSoldPrice == null) {
+      setSoldPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
+      hasError = true;
+    }
+    if (hasError) return;
+
     setLoading(true);
     try {
       const data = await api.thresholdBreakdown(selectedId, {
         date,
         hour: hour === "" ? undefined : Number(hour),
         avail_op: availOp,
-        avail_price: Number(availPrice) || 0,
+        avail_price: parsedAvailPrice as number,
         sold_op: soldOp,
-        sold_price: Number(soldPrice) || 0,
+        sold_price: parsedSoldPrice as number,
       });
       setResult(data);
     } catch (err) {
@@ -128,13 +146,17 @@ export default function DataAnalysisPage() {
                 </button>
               </div>
               <input
-                type="number"
+                type="text"
                 value={availPrice}
-                onChange={(e) => setAvailPrice(e.target.value)}
-                placeholder="price"
+                onChange={(e) => {
+                  setAvailPrice(e.target.value);
+                  if (availPriceError) setAvailPriceError(null);
+                }}
+                placeholder="e.g. 200k"
                 className="border border-border rounded px-3 py-1.5 text-sm w-32"
               />
             </div>
+            {availPriceError && <p className="text-destructive text-xs mt-1">{availPriceError}</p>}
           </div>
 
           <div>
@@ -161,13 +183,17 @@ export default function DataAnalysisPage() {
                 </button>
               </div>
               <input
-                type="number"
+                type="text"
                 value={soldPrice}
-                onChange={(e) => setSoldPrice(e.target.value)}
-                placeholder="price"
+                onChange={(e) => {
+                  setSoldPrice(e.target.value);
+                  if (soldPriceError) setSoldPriceError(null);
+                }}
+                placeholder="e.g. 200k"
                 className="border border-border rounded px-3 py-1.5 text-sm w-32"
               />
             </div>
+            {soldPriceError && <p className="text-destructive text-xs mt-1">{soldPriceError}</p>}
           </div>
         </div>
 

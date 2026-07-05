@@ -1,3 +1,24 @@
+/**
+ * Parse a user-supplied price string, supporting shorthand suffixes.
+ * Mirrors notifications/rule_parser.py's `_parse_price_input`:
+ *   "25k"    -> 25000
+ *   "25kk"   -> 25000000
+ *   "1.5k"   -> 1500
+ *   "25000"  -> 25000
+ * Returns null if the string doesn't match the expected pattern.
+ */
+export function parsePriceShorthand(input: string): number | null {
+  const trimmed = input.trim();
+  const match = /^(\d+(?:[.,]\d+)?)\s*(kk|k)?$/i.exec(trimmed);
+  if (!match) return null;
+  const number = parseFloat(match[1].replace(",", "."));
+  if (Number.isNaN(number)) return null;
+  const suffix = (match[2] || "").toLowerCase();
+  if (suffix === "kk") return number * 1_000_000;
+  if (suffix === "k") return number * 1_000;
+  return number;
+}
+
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   (typeof window !== "undefined"
