@@ -30,6 +30,26 @@ import {
   WEEKDAY_NAMES,
 } from "@/lib/api";
 
+function SalesByHourTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: { payload: { estimated_units_sold: number; estimated_revenue: number } }[];
+  label?: string;
+}) {
+  if (!active || !payload || !payload.length) return null;
+  const { estimated_units_sold, estimated_revenue } = payload[0].payload;
+  return (
+    <div className="bg-background border border-border rounded p-2 text-xs shadow">
+      <p className="font-semibold mb-1">{label}</p>
+      <p>Avg est. units sold: {estimated_units_sold.toFixed(1)}</p>
+      <p>Avg est. revenue: {estimated_revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+    </div>
+  );
+}
+
 export default function ItemDetailClient({ itemId }: { itemId: number }) {
   const router = useRouter();
   const [items, setItems] = useState<TrackedItem[]>([]);
@@ -68,10 +88,11 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
 
   const hourlyChartData = hourly.map((h) => ({ ...h, label: `${h.hour}:00` }));
   const weekdayChartData = weekday.map((w) => ({ ...w, label: WEEKDAY_NAMES[w.weekday] }));
-  const salesByHourMap = new Map(salesByHour.map((s) => [s.hour, s.estimated_units_sold]));
+  const salesByHourMap = new Map(salesByHour.map((s) => [s.hour, s]));
   const salesByHourChartData = Array.from({ length: 24 }, (_, hour) => ({
     label: `${hour}:00`,
-    estimated_units_sold: salesByHourMap.get(hour) ?? 0,
+    estimated_units_sold: salesByHourMap.get(hour)?.estimated_units_sold ?? 0,
+    estimated_revenue: salesByHourMap.get(hour)?.estimated_revenue ?? 0,
   }));
 
   const cheapestHour = hourly.length
@@ -205,8 +226,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} />
-              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-              <Tooltip formatter={(v: any) => (typeof v === "number" ? v.toFixed(1) : v)} />
+              <Tooltip content={<SalesByHourTooltip />} />
               <Bar dataKey="estimated_units_sold" fill="var(--color-accent)" name="Avg est. units sold" />
             </BarChart>
           </ResponsiveContainer>

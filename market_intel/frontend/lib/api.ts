@@ -86,6 +86,7 @@ export type MapStat = {
 export type SalesByHour = {
   hour: number;
   estimated_units_sold: number;
+  estimated_revenue: number;
   sale_events: number;
   avg_sale_price: number | null;
 };

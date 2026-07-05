@@ -133,6 +133,7 @@ class SalesByHourOut(BaseModel):
 
     hour: int
     estimated_units_sold: float  # average daily units sold at this hour (not cumulative)
+    estimated_revenue: float  # average daily revenue at this hour (not cumulative)
     sale_events: int             # number of days that had sales at this hour
     avg_sale_price: float | None  # quantity-weighted avg price; null if no priced sale events
 

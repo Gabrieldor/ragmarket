@@ -399,19 +399,23 @@ def sales_by_hour(
     """
     # Per-day totals: (date, hour) → {sold, price_num, price_den}
     # Use Brazil local time so the chart shows hours meaningful to the user.
-    daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0, "price_num": 0.0, "price_den": 0})
+    daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0, "revenue": 0.0, "price_num": 0.0, "price_den": 0})
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         brt = event.sale_attributed_at - timedelta(hours=3)
         key = (brt.date(), brt.hour)
         daily[key]["sold"] += event.quantity_sold
         if event.price is not None:
+            daily[key]["revenue"] += event.price * event.quantity_sold
             daily[key]["price_num"] += event.price * event.quantity_sold
             daily[key]["price_den"] += event.quantity_sold
 
     # Average across days per hour
-    hourly: dict[int, dict] = defaultdict(lambda: {"sold_values": [], "price_num": 0.0, "price_den": 0})
+    hourly: dict[int, dict] = defaultdict(
+        lambda: {"sold_values": [], "revenue_values": [], "price_num": 0.0, "price_den": 0}
+    )
     for (_, hour), vals in daily.items():
         hourly[hour]["sold_values"].append(vals["sold"])
+        hourly[hour]["revenue_values"].append(vals["revenue"])
         hourly[hour]["price_num"] += vals["price_num"]
         hourly[hour]["price_den"] += vals["price_den"]
 
@@ -419,6 +423,7 @@ def sales_by_hour(
         SalesByHourOut(
             hour=hour,
             estimated_units_sold=statistics.mean(b["sold_values"]),
+            estimated_revenue=statistics.mean(b["revenue_values"]),
             sale_events=len(b["sold_values"]),
             avg_sale_price=b["price_num"] / b["price_den"] if b["price_den"] else None,
         )
