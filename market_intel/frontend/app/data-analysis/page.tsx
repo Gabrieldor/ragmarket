@@ -13,10 +13,12 @@ export default function DataAnalysisPage() {
   const [date, setDate] = useState(todayDate());
   const [hour, setHour] = useState<string>("");
 
-  const [availOp, setAvailOp] = useState<"above" | "below">("above");
+  const [availOp, setAvailOp] = useState<"above" | "below" | "between">("above");
   const [availPrice, setAvailPrice] = useState("");
-  const [soldOp, setSoldOp] = useState<"above" | "below">("above");
+  const [availPriceMax, setAvailPriceMax] = useState("");
+  const [soldOp, setSoldOp] = useState<"above" | "below" | "between">("above");
   const [soldPrice, setSoldPrice] = useState("");
+  const [soldPriceMax, setSoldPriceMax] = useState("");
 
   const [result, setResult] = useState<ThresholdBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
@@ -40,6 +42,8 @@ export default function DataAnalysisPage() {
 
     const parsedAvailPrice = availPrice.trim() === "" ? undefined : parsePriceShorthand(availPrice);
     const parsedSoldPrice = soldPrice.trim() === "" ? undefined : parsePriceShorthand(soldPrice);
+    const parsedAvailPriceMax = availPriceMax.trim() === "" ? undefined : parsePriceShorthand(availPriceMax);
+    const parsedSoldPriceMax = soldPriceMax.trim() === "" ? undefined : parsePriceShorthand(soldPriceMax);
     let hasError = false;
     if (availPrice.trim() !== "" && parsedAvailPrice == null) {
       setAvailPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
@@ -48,6 +52,24 @@ export default function DataAnalysisPage() {
     if (soldPrice.trim() !== "" && parsedSoldPrice == null) {
       setSoldPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
       hasError = true;
+    }
+    if (availOp === "between" && parsedAvailPrice != null) {
+      if (availPriceMax.trim() === "" || parsedAvailPriceMax == null) {
+        setAvailPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
+        hasError = true;
+      } else if (parsedAvailPriceMax <= parsedAvailPrice) {
+        setAvailPriceError("'To' must be greater than 'From'");
+        hasError = true;
+      }
+    }
+    if (soldOp === "between" && parsedSoldPrice != null) {
+      if (soldPriceMax.trim() === "" || parsedSoldPriceMax == null) {
+        setSoldPriceError("Invalid price (e.g. 200k, 1.5k, 200000)");
+        hasError = true;
+      } else if (parsedSoldPriceMax <= parsedSoldPrice) {
+        setSoldPriceError("'To' must be greater than 'From'");
+        hasError = true;
+      }
     }
     if (availPrice.trim() === "" && soldPrice.trim() === "") {
       setError("Enter at least one price filter");
@@ -62,8 +84,10 @@ export default function DataAnalysisPage() {
         hour: hour === "" ? undefined : Number(hour),
         avail_op: parsedAvailPrice != null ? availOp : undefined,
         avail_price: parsedAvailPrice ?? undefined,
+        avail_price_max: availOp === "between" ? parsedAvailPriceMax ?? undefined : undefined,
         sold_op: parsedSoldPrice != null ? soldOp : undefined,
         sold_price: parsedSoldPrice ?? undefined,
+        sold_price_max: soldOp === "between" ? parsedSoldPriceMax ?? undefined : undefined,
       });
       setResult(data);
     } catch (err) {
@@ -148,17 +172,51 @@ export default function DataAnalysisPage() {
                 >
                   Below
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setAvailOp("between")}
+                  className={`text-xs px-3 py-1.5 ${
+                    availOp === "between" ? "bg-primary text-white" : "bg-card text-card-foreground"
+                  }`}
+                >
+                  Between
+                </button>
               </div>
-              <input
-                type="text"
-                value={availPrice}
-                onChange={(e) => {
-                  setAvailPrice(e.target.value);
-                  if (availPriceError) setAvailPriceError(null);
-                }}
-                placeholder="e.g. 200k"
-                className="border border-border rounded px-3 py-1.5 text-sm w-32"
-              />
+              {availOp === "between" ? (
+                <>
+                  <input
+                    type="text"
+                    value={availPrice}
+                    onChange={(e) => {
+                      setAvailPrice(e.target.value);
+                      if (availPriceError) setAvailPriceError(null);
+                    }}
+                    placeholder="From e.g. 200k"
+                    className="border border-border rounded px-3 py-1.5 text-sm w-32"
+                  />
+                  <input
+                    type="text"
+                    value={availPriceMax}
+                    onChange={(e) => {
+                      setAvailPriceMax(e.target.value);
+                      if (availPriceError) setAvailPriceError(null);
+                    }}
+                    placeholder="To e.g. 500k"
+                    className="border border-border rounded px-3 py-1.5 text-sm w-32"
+                  />
+                </>
+              ) : (
+                <input
+                  type="text"
+                  value={availPrice}
+                  onChange={(e) => {
+                    setAvailPrice(e.target.value);
+                    if (availPriceError) setAvailPriceError(null);
+                  }}
+                  placeholder="e.g. 200k"
+                  className="border border-border rounded px-3 py-1.5 text-sm w-32"
+                />
+              )}
             </div>
             {availPriceError && <p className="text-destructive text-xs mt-1">{availPriceError}</p>}
           </div>
@@ -185,17 +243,51 @@ export default function DataAnalysisPage() {
                 >
                   Below
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setSoldOp("between")}
+                  className={`text-xs px-3 py-1.5 ${
+                    soldOp === "between" ? "bg-primary text-white" : "bg-card text-card-foreground"
+                  }`}
+                >
+                  Between
+                </button>
               </div>
-              <input
-                type="text"
-                value={soldPrice}
-                onChange={(e) => {
-                  setSoldPrice(e.target.value);
-                  if (soldPriceError) setSoldPriceError(null);
-                }}
-                placeholder="e.g. 200k"
-                className="border border-border rounded px-3 py-1.5 text-sm w-32"
-              />
+              {soldOp === "between" ? (
+                <>
+                  <input
+                    type="text"
+                    value={soldPrice}
+                    onChange={(e) => {
+                      setSoldPrice(e.target.value);
+                      if (soldPriceError) setSoldPriceError(null);
+                    }}
+                    placeholder="From e.g. 200k"
+                    className="border border-border rounded px-3 py-1.5 text-sm w-32"
+                  />
+                  <input
+                    type="text"
+                    value={soldPriceMax}
+                    onChange={(e) => {
+                      setSoldPriceMax(e.target.value);
+                      if (soldPriceError) setSoldPriceError(null);
+                    }}
+                    placeholder="To e.g. 500k"
+                    className="border border-border rounded px-3 py-1.5 text-sm w-32"
+                  />
+                </>
+              ) : (
+                <input
+                  type="text"
+                  value={soldPrice}
+                  onChange={(e) => {
+                    setSoldPrice(e.target.value);
+                    if (soldPriceError) setSoldPriceError(null);
+                  }}
+                  placeholder="e.g. 200k"
+                  className="border border-border rounded px-3 py-1.5 text-sm w-32"
+                />
+              )}
             </div>
             {soldPriceError && <p className="text-destructive text-xs mt-1">{soldPriceError}</p>}
           </div>

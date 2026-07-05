@@ -736,16 +736,19 @@ def threshold_breakdown(
     hour: int | None = Query(default=None, ge=0, le=23),
     avail_op: str | None = Query(default=None),
     avail_price: float | None = Query(default=None),
+    avail_price_max: float | None = Query(default=None),
     sold_op: str | None = Query(default=None),
     sold_price: float | None = Query(default=None),
+    sold_price_max: float | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    """Counts of listings/sales above or below a given price threshold within a date (and
-    optional hour) window, broken down by canonical map name -- for the data-analysis page's
-    threshold exploration view.
+    """Counts of listings/sales above, below, or between a given price threshold within a
+    date (and optional hour) window, broken down by canonical map name -- for the
+    data-analysis page's threshold exploration view.
 
     At least one of `avail_price` / `sold_price` must be provided; the other side is simply
-    omitted (returned as `None`) if its price is not given.
+    omitted (returned as `None`) if its price is not given. When the op is "between", the
+    corresponding `*_price` is the low bound and `*_price_max` is the required high bound.
     """
     if avail_price is None and sold_price is None:
         raise HTTPException(
@@ -757,14 +760,29 @@ def threshold_breakdown(
     if sold_price is not None and sold_op is None:
         sold_op = "above"
 
+    if avail_op == "between" and avail_price is not None:
+        if avail_price_max is None or avail_price_max <= avail_price:
+            raise HTTPException(
+                status_code=400,
+                detail="avail_price_max must be provided and greater than avail_price for the 'between' operator",
+            )
+    if sold_op == "between" and sold_price is not None:
+        if sold_price_max is None or sold_price_max <= sold_price:
+            raise HTTPException(
+                status_code=400,
+                detail="sold_price_max must be provided and greater than sold_price for the 'between' operator",
+            )
+
     start, end = _brazil_window(date, hour)
     alias_lookup = get_map_alias_lookup(db)
 
-    def _cmp(op: str, value, threshold):
+    def _cmp(op: str, value, threshold, threshold_max=None):
         if op == "above":
             return value > threshold
         if op == "below":
             return value < threshold
+        if op == "between":
+            return threshold <= value <= threshold_max
         raise ValueError(f"invalid op: {op!r}")
 
     available_side: ThresholdSideOut | None = None
@@ -778,7 +796,7 @@ def threshold_breakdown(
                 ListingObservation.observed_at < end,
             )
         ):
-            if not _cmp(avail_op, obs.price, avail_price):
+            if not _cmp(avail_op, obs.price, avail_price, avail_price_max):
                 continue
             raw_name = obs.map_name or "unknown"
             canonical = alias_lookup.get(raw_name, raw_name)
@@ -798,7 +816,7 @@ def threshold_breakdown(
                 SaleEvent.sale_attributed_at < end,
             )
         ):
-            if event.price is None or not _cmp(sold_op, event.price, sold_price):
+            if event.price is None or not _cmp(sold_op, event.price, sold_price, sold_price_max):
                 continue
             raw_name = event.map_name or "unknown"
             canonical = alias_lookup.get(raw_name, raw_name)

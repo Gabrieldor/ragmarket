@@ -366,10 +366,12 @@ export const api = {
     params: {
       date: string;
       hour?: number;
-      avail_op?: "above" | "below";
+      avail_op?: "above" | "below" | "between";
       avail_price?: number;
-      sold_op?: "above" | "below";
+      avail_price_max?: number;
+      sold_op?: "above" | "below" | "between";
       sold_price?: number;
+      sold_price_max?: number;
     }
   ) => {
     const qs = new URLSearchParams();
@@ -378,10 +380,16 @@ export const api = {
     if (params.avail_price !== undefined) {
       qs.set("avail_op", params.avail_op ?? "above");
       qs.set("avail_price", String(params.avail_price));
+      if (params.avail_op === "between" && params.avail_price_max !== undefined) {
+        qs.set("avail_price_max", String(params.avail_price_max));
+      }
     }
     if (params.sold_price !== undefined) {
       qs.set("sold_op", params.sold_op ?? "above");
       qs.set("sold_price", String(params.sold_price));
+      if (params.sold_op === "between" && params.sold_price_max !== undefined) {
+        qs.set("sold_price_max", String(params.sold_price_max));
+      }
     }
     return apiFetch<ThresholdBreakdown>(`/analytics/${itemId}/threshold-breakdown?${qs.toString()}`);
   },
