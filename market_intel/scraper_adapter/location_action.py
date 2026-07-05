@@ -15,7 +15,9 @@ fallback to maintain.
 
 import logging
 
-from playwright.async_api import Page
+from playwright.async_api import Page, Error as PlaywrightError
+
+from notifications.rule_parser import REFINE_PREFIX_RE, SLOT_SUFFIX_RE
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +40,49 @@ _EXTRACT_MODAL_JS = """
         if (coordSpan) coordSpan.remove();
         result[label.textContent.trim()] = { value: clone.textContent.trim(), coords };
     });
+    const titleEl = document.querySelector('h3');
+    result.itemNameTitle = titleEl ? titleEl.textContent.trim() : null;
     return result;
 }
 """
 
 
+def parse_item_name_title(text: str | None) -> tuple[int | None, int | None]:
+    """Extract ``(actual_refine, actual_slot)`` from a modal's item-name title text,
+    e.g. ``"+7Sapatos do Lobo Cinzento"`` -> ``(7, None)`` or
+    ``"Sapatos do Lobo Cinzento [1]"`` -> ``(None, 1)``.
+
+    Uses the same leading ``+N`` / trailing ``[N]`` patterns as
+    notifications.rule_parser.parse_rule so a rule's ``required_refine``/``required_slot``
+    can be compared directly against a listing's actual modal title.
+    """
+    if not text:
+        return None, None
+
+    actual_refine: int | None = None
+    refine_match = REFINE_PREFIX_RE.match(text)
+    if refine_match:
+        actual_refine = int(refine_match.group(1))
+
+    actual_slot: int | None = None
+    slot_match = SLOT_SUFFIX_RE.search(text)
+    if slot_match:
+        actual_slot = int(slot_match.group(1))
+
+    return actual_refine, actual_slot
+
+
 class ShopLocationDetail:
-    def __init__(self, map_name: str | None, x_pos: int | None, y_pos: int | None, seller_name: str | None, server_name: str | None):
+    def __init__(
+        self, map_name: str | None, x_pos: int | None, y_pos: int | None, seller_name: str | None,
+        server_name: str | None, item_name_title: str | None = None,
+    ):
         self.map_name = map_name
         self.x_pos = x_pos
         self.y_pos = y_pos
         self.seller_name = seller_name
         self.server_name = server_name
+        self.item_name_title = item_name_title
 
 
 def _parse_coords(coords: str | None) -> tuple[int | None, int | None]:
@@ -94,9 +127,39 @@ async def fetch_shop_location(page: Page, card_locator, timeout_ms: int = 8_000)
     deliberately short (modals render in ~1s under normal conditions per live
     testing) so a stuck attempt fails fast rather than blocking for the full
     page-navigation timeout.
+
+    If the card click triggers a full page navigation (the site changed its
+    frontend so that clicking a listing card reloads the page instead of
+    opening a modal), we detect it immediately via a framenavigated listener
+    and return None without burning timeout waiting for a modal that won't appear.
+    Each accidental navigation = one extra HTTP GET, so catching it early
+    prevents the rate limiter from seeing a burst of full page loads.
     """
+    navigated = False
+
+    def _on_navigated(frame) -> None:
+        nonlocal navigated
+        if frame == page.main_frame:
+            navigated = True
+
+    page.on("framenavigated", _on_navigated)
     try:
         await card_locator.click(timeout=timeout_ms)
+        # Yield briefly so the framenavigated event can fire before we check.
+        await page.wait_for_timeout(150)
+        if navigated:
+            # Click caused a page reload instead of opening a modal -- the site's
+            # frontend changed. Wait for the reload to settle so the page is usable
+            # again, then bail out. Caller's circuit breaker will stop further attempts.
+            logger.warning(
+                "Card click triggered page navigation instead of opening modal "
+                "(site frontend change?) -- skipping location lookup"
+            )
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+            except Exception:
+                pass
+            return None
         await page.wait_for_selector(MODAL_WRAP, timeout=timeout_ms)
         await page.wait_for_timeout(300)  # let modal content finish rendering
         raw = await page.evaluate(_EXTRACT_MODAL_JS)
@@ -105,6 +168,10 @@ async def fetch_shop_location(page: Page, card_locator, timeout_ms: int = 8_000)
         await _force_close_any_overlay(page)
         return None
     finally:
+        try:
+            page.remove_listener("framenavigated", _on_navigated)
+        except Exception:
+            pass
         try:
             await page.keyboard.press("Escape")
             await page.wait_for_timeout(300)
@@ -119,7 +186,9 @@ async def fetch_shop_location(page: Page, card_locator, timeout_ms: int = 8_000)
     x_pos, y_pos = _parse_coords(location_field["coords"] if location_field else None)
     seller_name = seller_field["value"] if seller_field else None
     server_name = server_field["value"] if server_field else None
+    item_name_title = raw.get("itemNameTitle")
 
     return ShopLocationDetail(
-        map_name=map_name, x_pos=x_pos, y_pos=y_pos, seller_name=seller_name, server_name=server_name
+        map_name=map_name, x_pos=x_pos, y_pos=y_pos, seller_name=seller_name, server_name=server_name,
+        item_name_title=item_name_title,
     )

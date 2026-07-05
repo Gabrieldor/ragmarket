@@ -55,9 +55,10 @@ def get_watch_rules(active_only: bool = False, db: Session = Depends(get_db)):
 @router.post("/watch-rules", response_model=WatchRuleOut, status_code=201)
 def create_watch_rule(payload: WatchRuleCreate, db: Session = Depends(get_db)):
     try:
-        item_name, operator, target_price = parse_rule(payload.raw)
+        item_name, operator, target_price, required_refine, required_slot = parse_rule(payload.raw)
         rule = add_watch_rule(
-            db, raw=payload.raw.strip(), item_name=item_name, operator=operator, target_price=target_price
+            db, raw=payload.raw.strip(), item_name=item_name, operator=operator, target_price=target_price,
+            required_refine=required_refine, required_slot=required_slot,
         )
         db.commit()
         return rule

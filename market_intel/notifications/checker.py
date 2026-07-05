@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import NotificationEvent, NotificationSettings, WatchRule
+from scraper_adapter.location_action import parse_item_name_title
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,67 @@ def evaluate_rule(
     return condition_met, cheapest
 
 
+async def _fetch_refine_slot_matched_listings(
+    rule: WatchRule,
+    provider,
+    config: NotificationSettings,
+) -> list:
+    """Re-scrape ``rule``'s listings through their shop-location modal to verify the
+    actual refine level / slot count, keeping only listings matching
+    ``rule.required_refine``/``rule.required_slot``. Only called when at least one of
+    those is set on the rule -- rules without them never pay this cost (see
+    ``check_watch_rules``).
+
+    Requires ``provider.scrape_item()`` (``DetailedListingProvider`` -- carries
+    ``dom_index`` so a matching card can be clicked). Candidates are limited to listings
+    priced at or below the rule's upper variance bound, mirroring the price-threshold
+    selection ``evaluate_rule`` already applies, so refine/slot verification doesn't have
+    to open every card on the page -- only the ones that could plausibly matter.
+    Throttling between modal clicks is handled inside ``scrape_item`` itself
+    (``location_click_delay_seconds``), same as the tracked-item location lookups.
+    """
+    if not hasattr(provider, "scrape_item"):
+        logger.warning(
+            "[%s] required_refine/required_slot set but provider has no scrape_item() -- "
+            "skipping refine/slot verification.", rule.raw,
+        )
+        return []
+
+    _, upper = _bounds(rule.target_price, config.variance_percent)
+
+    def _needs_check(listing) -> bool:
+        return listing.price <= upper
+
+    detailed = await provider.scrape_item(
+        item_name=rule.item_name,
+        store_type=config.store_type,
+        server_type=config.server_type,
+        needs_location=_needs_check,
+        sort="LOW_PRICE",
+        max_pages=config.max_pages,
+    )
+
+    matched = []
+    for listing, location in detailed:
+        if not _needs_check(listing):
+            # Not a price candidate -- refine/slot was never looked up for it.
+            continue
+        if location is None or location.item_name_title is None:
+            logger.debug(
+                "[%s] could not verify refine/slot for a candidate listing -- skipping it.",
+                rule.raw,
+            )
+            continue
+        actual_refine, actual_slot = parse_item_name_title(location.item_name_title)
+        if rule.required_refine is not None and actual_refine != rule.required_refine:
+            continue
+        if rule.required_slot is not None and actual_slot != rule.required_slot:
+            continue
+        matched.append(listing)
+
+    return matched
+
+
 async def check_watch_rules(
     session: Session,
     provider,
@@ -97,13 +159,16 @@ async def check_watch_rules(
         if index > 0:
             await asyncio.sleep(config.rule_delay_seconds)
 
-        listings = await provider.get_listings(
-            item_name=rule.item_name,
-            store_type=config.store_type,
-            server_type=config.server_type,
-            sort="LOW_PRICE",
-            max_pages=config.max_pages,
-        )
+        if rule.required_refine is not None or rule.required_slot is not None:
+            listings = await _fetch_refine_slot_matched_listings(rule, provider, config)
+        else:
+            listings = await provider.get_listings(
+                item_name=rule.item_name,
+                store_type=config.store_type,
+                server_type=config.server_type,
+                sort="LOW_PRICE",
+                max_pages=config.max_pages,
+            )
         condition_met, best_price = evaluate_rule(
             rule, listings, config.variance_percent, config.min_items_below
         )

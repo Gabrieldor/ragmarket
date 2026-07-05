@@ -374,6 +374,8 @@ class WatchRuleOut(BaseModel):
     item_name: str
     operator: str
     target_price: int
+    required_refine: int | None
+    required_slot: int | None
     is_active: bool
     state_active: bool
     last_price: int | None

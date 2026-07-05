@@ -476,11 +476,17 @@ def list_watch_rules(session: Session, *, active_only: bool = False) -> list[Wat
     return list(session.scalars(stmt))
 
 
-def add_watch_rule(session: Session, *, raw: str, item_name: str, operator: str, target_price: int) -> WatchRule:
+def add_watch_rule(
+    session: Session, *, raw: str, item_name: str, operator: str, target_price: int,
+    required_refine: int | None = None, required_slot: int | None = None,
+) -> WatchRule:
     existing = session.scalar(select(WatchRule).where(WatchRule.raw == raw))
     if existing is not None:
         raise ValueError(f"Rule already exists: {raw!r}")
-    rule = WatchRule(raw=raw, item_name=item_name, operator=operator, target_price=target_price)
+    rule = WatchRule(
+        raw=raw, item_name=item_name, operator=operator, target_price=target_price,
+        required_refine=required_refine, required_slot=required_slot,
+    )
     session.add(rule)
     session.flush()
     return rule

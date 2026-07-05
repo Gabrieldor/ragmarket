@@ -5,6 +5,14 @@ stored directly on the db.models.WatchRule row instead of a separate value objec
 
 import re
 
+# Leading refine prefix, e.g. "+7 Sapatos do Lobo Cinzento" -> refine level 7.
+# Shared with scraper_adapter.location_action (imported there, not duplicated).
+REFINE_PREFIX_RE = re.compile(r'^\+(\d+)\s*')
+
+# Trailing slot-count suffix, e.g. "Item Name [1]" -> slot count 1.
+# Shared with scraper_adapter.location_action (imported there, not duplicated).
+SLOT_SUFFIX_RE = re.compile(r'\s*\[(\d+)\]\s*$')
+
 
 def _parse_price_input(price_str: str) -> int:
     """Convert a user-supplied price string to an integer.
@@ -27,9 +35,9 @@ def _parse_price_input(price_str: str) -> int:
     return int(number)
 
 
-def parse_rule(rule_str: str) -> tuple[str, str, int]:
+def parse_rule(rule_str: str) -> tuple[str, str, int, int | None, int | None]:
     """Parse a rule string such as ``'Elunium > 25k'`` into ``(item_name, operator,
-    target_price)``.
+    target_price, required_refine, required_slot)``.
 
     Only ``>`` and ``<`` are accepted as operators. Internally they are treated as ``>=``
     and ``<=`` (plus optional variance, see notifications.checker) to avoid missing edge
@@ -37,6 +45,16 @@ def parse_rule(rule_str: str) -> tuple[str, str, int]:
 
     Price supports K and KK suffixes:
       ``25k`` -> 25 000   ``25kk`` -> 25 000 000
+
+    The raw item name may also carry a leading refine prefix (``+7 ...``) and/or a
+    trailing slot-count suffix (``... [1]``), e.g.::
+
+        '+7 Sapatos do Lobo Cinzento [1] < 25kk'
+        -> item_name='Sapatos do Lobo Cinzento', operator='<', target_price=25_000_000,
+           required_refine=7, required_slot=1
+
+    Both are optional and independent; a rule with neither yields
+    ``required_refine=None, required_slot=None`` and behaves exactly as before.
 
     Raises:
         ValueError: When the format is invalid.
@@ -52,4 +70,17 @@ def parse_rule(rule_str: str) -> tuple[str, str, int]:
     item_name = match.group(1).strip()
     operator = match.group(2)
     target_price = _parse_price_input(match.group(3))
-    return item_name, operator, target_price
+
+    required_refine: int | None = None
+    refine_match = REFINE_PREFIX_RE.match(item_name)
+    if refine_match:
+        required_refine = int(refine_match.group(1))
+        item_name = item_name[refine_match.end():].strip()
+
+    required_slot: int | None = None
+    slot_match = SLOT_SUFFIX_RE.search(item_name)
+    if slot_match:
+        required_slot = int(slot_match.group(1))
+        item_name = item_name[:slot_match.start()].strip()
+
+    return item_name, operator, target_price, required_refine, required_slot

@@ -353,6 +353,8 @@ class WatchRule(Base):
     # whether or not it has crossed the trigger threshold."
     last_checked_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    required_refine: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    required_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
