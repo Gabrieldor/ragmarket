@@ -172,42 +172,6 @@ export type OutlierObservation = {
   price_multiple: number;
 };
 
-export type VendorAlias = {
-  id: number;
-  alias_name: string;
-  created_at: string;
-};
-
-export type ItemCostBasis = {
-  id: number;
-  tracked_item_id: number;
-  cost_per_unit: number;
-  effective_from: string;
-};
-
-export type MyListingSession = {
-  id: number;
-  tracked_item_id: number;
-  item_name: string;
-  ssi: string;
-  seller_name: string;
-  shop_name: string | null;
-  map_name: string | null;
-  price: number;
-  window_start: string;
-  window_end: string;
-  initial_quantity: number;
-  last_known_quantity: number;
-  total_quantity_sold: number;
-  status: "active" | "expired" | "sold_out_early" | "shop_removed";
-  ended_reason: string | null;
-  cost_per_unit: number | null;
-  revenue: number;
-  profit: number | null;
-  dismissed: boolean;
-  dismissed_at: string | null;
-};
-
 export type SaleEvent = {
   id: number;
   tracked_item_id: number;
@@ -228,10 +192,9 @@ export type SaleMethodBreakdown = {
   total_quantity_sold: number;
 };
 
-export type MyStatusBreakdown = {
-  status: string;
-  session_count: number;
-  total_quantity_sold: number;
+export type ThresholdBreakdown = {
+  available: { total: number; by_map: { map_name: string; count: number }[] };
+  sold: { total: number; by_map: { map_name: string; count: number }[] };
 };
 
 export type MapAlias = {
@@ -265,15 +228,6 @@ export type SoldOutEvent = {
 export type SoldOutSummary = {
   tracked_item_id: number;
   active_count: number;
-};
-
-export type MySalesSummary = {
-  total_quantity_sold: number;
-  total_revenue: number;
-  total_profit: number | null;
-  by_item: { tracked_item_id: number; item_name: string; quantity_sold: number; revenue: number; profit: number | null }[];
-  by_map: { map_name: string | null; quantity_sold: number; revenue: number }[];
-  by_hour: { hour: number; quantity_sold: number }[];
 };
 
 export type WatchRule = {
@@ -386,6 +340,26 @@ export const api = {
     if (params.end) qs.set("end", params.end);
     return apiFetch<SaleMethodBreakdown[]>(`/analytics/${itemId}/sale-method-breakdown?${qs.toString()}`);
   },
+  thresholdBreakdown: (
+    itemId: number,
+    params: {
+      date: string;
+      hour?: number;
+      avail_op: "above" | "below";
+      avail_price: number;
+      sold_op: "above" | "below";
+      sold_price: number;
+    }
+  ) => {
+    const qs = new URLSearchParams();
+    qs.set("date", params.date);
+    if (params.hour !== undefined) qs.set("hour", String(params.hour));
+    qs.set("avail_op", params.avail_op);
+    qs.set("avail_price", String(params.avail_price));
+    qs.set("sold_op", params.sold_op);
+    qs.set("sold_price", String(params.sold_price));
+    return apiFetch<ThresholdBreakdown>(`/analytics/${itemId}/threshold-breakdown?${qs.toString()}`);
+  },
 
   getScraperConfig: () => apiFetch<ScraperConfig>("/scraper-config"),
   updateScraperConfig: (body: { outlier_factor: number }) =>
@@ -409,34 +383,6 @@ export const api = {
   pauseCollector: () => apiFetch<CollectorStatus>("/collector/pause", { method: "POST" }),
   resumeCollector: () => apiFetch<CollectorStatus>("/collector/resume", { method: "POST" }),
   retryCollector: () => apiFetch<CollectorStatus>("/collector/retry", { method: "POST" }),
-
-  listVendorAliases: () => apiFetch<VendorAlias[]>("/my-sales/aliases"),
-  addVendorAlias: (alias_name: string) =>
-    apiFetch<VendorAlias>("/my-sales/aliases", { method: "POST", body: JSON.stringify({ alias_name }) }),
-  deleteVendorAlias: (id: number) => apiFetch<void>(`/my-sales/aliases/${id}`, { method: "DELETE" }),
-
-  getCostBasis: (itemId: number) => apiFetch<ItemCostBasis | null>(`/my-sales/cost-basis/${itemId}`),
-  setCostBasis: (itemId: number, cost_per_unit: number) =>
-    apiFetch<ItemCostBasis>(`/my-sales/cost-basis/${itemId}`, {
-      method: "POST",
-      body: JSON.stringify({ cost_per_unit }),
-    }),
-
-  myListingSessions: (params: Record<string, string | number | boolean | undefined> = {}) => {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== "") qs.set(k, String(v));
-    }
-    return apiFetch<MyListingSession[]>(`/my-sales/sessions?${qs.toString()}`);
-  },
-  dismissMyListingSession: (id: number) =>
-    apiFetch<MyListingSession>(`/my-sales/sessions/${id}`, { method: "DELETE" }),
-  restoreMyListingSession: (id: number) =>
-    apiFetch<MyListingSession>(`/my-sales/sessions/${id}/restore`, { method: "POST" }),
-  markShopRemoved: (id: number) =>
-    apiFetch<MyListingSession>(`/my-sales/sessions/${id}/mark-shop-removed`, { method: "POST" }),
-  myStatusSummary: () => apiFetch<MyStatusBreakdown[]>("/my-sales/status-summary"),
-  mySalesSummary: () => apiFetch<MySalesSummary>("/my-sales/summary"),
 
   getSoldOutConfig: () => apiFetch<SoldOutConfig>("/sold-out/config"),
   updateSoldOutConfig: (payload: {

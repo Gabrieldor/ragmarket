@@ -246,82 +246,6 @@ class CurrentSnapshotOut(BaseModel):
     max_price: int | None
 
 
-class VendorAliasOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    alias_name: str
-    created_at: datetime
-
-
-class VendorAliasCreate(BaseModel):
-    alias_name: str
-
-
-class ItemCostBasisOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    tracked_item_id: int
-    cost_per_unit: float
-    effective_from: datetime
-
-
-class ItemCostBasisCreate(BaseModel):
-    cost_per_unit: float
-
-
-class MyListingSessionOut(BaseModel):
-    id: int
-    tracked_item_id: int
-    item_name: str
-    ssi: str
-    seller_name: str
-    shop_name: str | None
-    map_name: str | None
-    price: int
-    window_start: datetime
-    window_end: datetime
-    initial_quantity: int
-    last_known_quantity: int
-    total_quantity_sold: int
-    status: str
-    ended_reason: str | None
-    cost_per_unit: float | None
-    revenue: float
-    profit: float | None
-    dismissed: bool
-    dismissed_at: datetime | None
-
-
-class MySalesByItemOut(BaseModel):
-    tracked_item_id: int
-    item_name: str
-    quantity_sold: int
-    revenue: float
-    profit: float | None
-
-
-class MySalesByMapOut(BaseModel):
-    map_name: str | None
-    quantity_sold: int
-    revenue: float
-
-
-class MySalesByHourOut(BaseModel):
-    hour: int
-    quantity_sold: int
-
-
-class MySalesSummaryOut(BaseModel):
-    total_quantity_sold: int
-    total_revenue: float
-    total_profit: float | None  # null if any contributing sale has no cost basis set
-    by_item: list[MySalesByItemOut]
-    by_map: list[MySalesByMapOut]
-    by_hour: list[MySalesByHourOut]
-
-
 class SaleEventOut(BaseModel):
     """Raw drill-down row for the sold-out audit view -- one persisted SaleEvent."""
 
@@ -348,17 +272,6 @@ class SaleMethodBreakdownOut(BaseModel):
 
     method: str
     event_count: int
-    total_quantity_sold: int
-
-
-class MyStatusBreakdownOut(BaseModel):
-    """Counts/quantities of the user's own MyListingSession rows, grouped by status --
-    lets the user judge how often sold_out_early is correct vs. overcounting (see
-    TrackedItem dismiss flow for correcting individual misclassifications).
-    """
-
-    status: str
-    session_count: int
     total_quantity_sold: int
 
 
@@ -519,3 +432,18 @@ class NotificationSettingsUpdate(BaseModel):
     store_type: str | None = None
     server_type: str | None = None
     max_pages: int | None = None
+
+
+class MapCountOut(BaseModel):
+    map_name: str
+    count: int
+
+
+class ThresholdSideOut(BaseModel):
+    total: int
+    by_map: list[MapCountOut]
+
+
+class ThresholdBreakdownOut(BaseModel):
+    available: ThresholdSideOut
+    sold: ThresholdSideOut

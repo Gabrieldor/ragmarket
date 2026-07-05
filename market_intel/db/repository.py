@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -11,12 +11,9 @@ from db.models import (
     CollectorStatus,
     DailyStat,
     HourlyStat,
-    ItemCostBasis,
     ListingObservation,
     MapAlias,
     MapStat,
-    MyListingSession,
-    MySaleEvent,
     NotificationEvent,
     NotificationSettings,
     SaleEvent,
@@ -26,10 +23,9 @@ from db.models import (
     ScraperConfig,
     SoldOutEvent,
     TrackedItem,
-    VendorAlias,
     WatchRule,
 )
-from sales_inference import InferredSaleEvent, compute_my_listing_sessions, compute_sale_events
+from sales_inference import InferredSaleEvent, compute_sale_events
 from settings import settings
 from sold_out_inference import InferredSoldOutTrigger, compute_sold_out_triggers
 
@@ -469,269 +465,6 @@ def get_active_sold_out_counts(session: Session) -> dict[int, int]:
         if (event.tracked_item_id, event.ssi) in current_pairs:
             counts[event.tracked_item_id] += 1
     return dict(counts)
-
-
-# ── Vendor aliases ("my sales" tracking) ───────────────────────────────────────
-
-def list_vendor_aliases(session: Session) -> list[VendorAlias]:
-    return list(session.scalars(select(VendorAlias).order_by(VendorAlias.alias_name)))
-
-
-def add_vendor_alias(session: Session, alias_name: str) -> VendorAlias:
-    alias = VendorAlias(alias_name=alias_name)
-    session.add(alias)
-    session.flush()
-    return alias
-
-
-def remove_vendor_alias(session: Session, alias_id: int) -> None:
-    alias = session.get(VendorAlias, alias_id)
-    if alias is None:
-        raise ValueError(f"Vendor alias {alias_id} not found")
-    session.delete(alias)
-
-
-# ── Item cost basis (versioned -- see ItemCostBasis docstring) ────────────────
-
-def set_item_cost_basis(
-    session: Session, tracked_item_id: int, cost_per_unit: float, effective_from: datetime | None = None
-) -> ItemCostBasis:
-    row = ItemCostBasis(
-        tracked_item_id=tracked_item_id,
-        cost_per_unit=cost_per_unit,
-        effective_from=effective_from or datetime.now(),
-    )
-    session.add(row)
-    session.flush()
-    return row
-
-
-def get_current_cost_basis(session: Session, tracked_item_id: int) -> ItemCostBasis | None:
-    stmt = (
-        select(ItemCostBasis)
-        .where(ItemCostBasis.tracked_item_id == tracked_item_id)
-        .order_by(ItemCostBasis.effective_from.desc())
-        .limit(1)
-    )
-    return session.scalars(stmt).first()
-
-
-def get_cost_basis_at(session: Session, tracked_item_id: int, at_time: datetime) -> ItemCostBasis | None:
-    stmt = (
-        select(ItemCostBasis)
-        .where(ItemCostBasis.tracked_item_id == tracked_item_id, ItemCostBasis.effective_from <= at_time)
-        .order_by(ItemCostBasis.effective_from.desc())
-        .limit(1)
-    )
-    return session.scalars(stmt).first()
-
-
-# ── My listing sessions ("my sales" log, see MyListingSession/MySaleEvent) ─────
-
-_SHOP_REMOVED_CONTINUATION_HOURS = 24
-
-
-def sync_my_listing_sessions(session: Session, tracked_item_id: int) -> int:
-    """Updates (or creates) MyListingSession rows for every listing seen under a
-    registered vendor alias for this item, and records any newly-confirmed MySaleEvent
-    chunks. Safe to call repeatedly -- closed sessions are skipped, and sale chunks are
-    deduplicated by (session_id, occurred_at). Returns the count of newly-recorded chunks.
-
-    Continuation logic: if a new SSI appears from the same seller within
-    _SHOP_REMOVED_CONTINUATION_HOURS of a 'shop_removed' session, that session is
-    reused (SSI updated, sales added on top) so the two stints show as one entry.
-    """
-    aliases = {a.alias_name for a in list_vendor_aliases(session)}
-    if not aliases:
-        return 0
-
-    all_observations = list(
-        session.scalars(
-            select(ListingObservation).where(ListingObservation.tracked_item_id == tracked_item_id)
-        )
-    )
-    my_observations = [o for o in all_observations if o.seller_name in aliases]
-    if not my_observations:
-        return 0
-
-    existing_sessions = {
-        row.ssi: row
-        for row in session.scalars(
-            select(MyListingSession).where(MyListingSession.tracked_item_id == tracked_item_id)
-        )
-    }
-
-    new_chunk_count = 0
-    # Track old SSIs absorbed by a continuation this cycle so we don't process them again
-    # if they appear later in the loop (raw observations for old SSIs are never deleted).
-    consumed_ssis: set[str] = set()
-
-    for result in compute_my_listing_sessions(my_observations, all_observations):
-        if result.ssi in consumed_ssis:
-            continue  # absorbed by a continuation earlier in this cycle
-
-        session_row = existing_sessions.get(result.ssi)
-        if session_row is not None and (session_row.status != "active" or session_row.dismissed):
-            continue  # already closed, or dismissed by the user -- never reopen/resurrect
-
-        if session_row is None:
-            # Check if this is a continuation of a shop_removed session within the window.
-            continuation = session.scalars(
-                select(MyListingSession).where(
-                    MyListingSession.tracked_item_id == tracked_item_id,
-                    MyListingSession.seller_name == result.seller_name,
-                    MyListingSession.ended_reason == "shop_removed",
-                    MyListingSession.dismissed.is_(False),
-                    # The candidate session must be older than this listing -- guards against
-                    # old SSI raw observations triggering a backwards continuation on a session
-                    # that was already continued to a newer SSI in a previous cycle.
-                    MyListingSession.window_start < result.window_start,
-                    MyListingSession.window_end
-                    >= result.window_start - timedelta(hours=_SHOP_REMOVED_CONTINUATION_HOURS),
-                ).order_by(MyListingSession.window_end.desc())
-            ).first()
-
-            if continuation is not None:
-                # Reuse the old session: update SSI and extend with new sales.
-                old_ssi = continuation.ssi
-                consumed_ssis.add(old_ssi)  # prevent double-processing the absorbed SSI
-                del existing_sessions[old_ssi]
-                continuation.ssi = result.ssi
-                continuation.window_end = result.window_end
-                continuation.last_known_quantity = result.last_known_quantity
-                continuation.total_quantity_sold += result.total_quantity_sold
-                # Always clear ended_reason so the old SSI can't re-trigger continuation
-                # on subsequent sync cycles (raw observations for old SSIs remain in the DB
-                # and would otherwise match the shop_removed query every cycle).
-                continuation.ended_reason = None
-                if result.status != "active":
-                    continuation.status = result.status
-                else:
-                    continuation.status = "active"
-                session_row = continuation
-                existing_sessions[result.ssi] = session_row
-            else:
-                cost_row = get_cost_basis_at(session, tracked_item_id, result.window_start)
-                session_row = MyListingSession(
-                    tracked_item_id=tracked_item_id,
-                    ssi=result.ssi,
-                    seller_name=result.seller_name,
-                    shop_name=result.shop_name,
-                    map_name=result.map_name,
-                    price=result.price,
-                    window_start=result.window_start,
-                    window_end=result.window_end,
-                    initial_quantity=result.initial_quantity,
-                    last_known_quantity=result.last_known_quantity,
-                    total_quantity_sold=result.total_quantity_sold,
-                    status=result.status,
-                    cost_per_unit=cost_row.cost_per_unit if cost_row else None,
-                )
-                session.add(session_row)
-                session.flush()
-        else:
-            session_row.last_known_quantity = result.last_known_quantity
-            session_row.total_quantity_sold = result.total_quantity_sold
-            session_row.status = result.status
-
-        existing_chunks = set(
-            session.execute(
-                select(MySaleEvent.occurred_at).where(MySaleEvent.session_id == session_row.id)
-            ).scalars()
-        )
-        for occurred_at, qty in result.sale_chunks:
-            if occurred_at in existing_chunks:
-                continue
-            session.add(
-                MySaleEvent(
-                    session_id=session_row.id,
-                    tracked_item_id=tracked_item_id,
-                    map_name=result.map_name,
-                    occurred_at=occurred_at,
-                    quantity_sold=qty,
-                )
-            )
-            new_chunk_count += 1
-
-    session.flush()
-    return new_chunk_count
-
-
-def dismiss_my_listing_session(session: Session, session_id: int) -> MyListingSession:
-    """Soft-deletes a MyListingSession (e.g. a listing the user manually pulled rather than
-    sold, which the sellout heuristic misclassified). The row and its MySaleEvent rows are
-    kept for audit purposes, just excluded from the sales log/summary by default -- and
-    sync_my_listing_sessions (above) permanently skips dismissed sessions so the collector's
-    next cycle does not recreate it from the underlying observations.
-    """
-    row = session.get(MyListingSession, session_id)
-    if row is None:
-        raise ValueError(f"My listing session {session_id} not found")
-    row.dismissed = True
-    row.dismissed_at = datetime.now()
-    session.flush()
-    return row
-
-
-def mark_shop_removed(session: Session, session_id: int) -> MyListingSession:
-    """Marks a session as manually closed (user removed the shop, no sale occurred for the
-    remaining quantity). Corrects total_quantity_sold by subtracting the quantity that was
-    incorrectly attributed as sold when the listing disappeared, and cleans the corresponding
-    MySaleEvent chunk so the by-hour chart stays accurate.
-    """
-    row = session.get(MyListingSession, session_id)
-    if row is None:
-        raise ValueError(f"My listing session {session_id} not found")
-    if row.dismissed:
-        raise ValueError("Cannot mark a dismissed session")
-    if row.ended_reason == "shop_removed":
-        return row  # idempotent
-
-    if row.status == "sold_out_early" and row.last_known_quantity > 0:
-        # The sellout chunk was recorded as last_known_quantity at the last-seen timestamp.
-        # Find the MySaleEvent for this session that ends at/after that point and matches.
-        # It may be a standalone chunk or merged with a decrease on the same timestamp.
-        events = list(
-            session.scalars(
-                select(MySaleEvent)
-                .where(MySaleEvent.session_id == row.id)
-                .order_by(MySaleEvent.occurred_at.desc())
-            )
-        )
-        remaining = row.last_known_quantity
-        for evt in events:
-            if evt.quantity_sold <= remaining:
-                # This entire event was the sellout chunk -- remove it.
-                remaining -= evt.quantity_sold
-                session.delete(evt)
-                if remaining == 0:
-                    break
-            else:
-                # Decrease + sellout were merged into this event -- reduce it.
-                evt.quantity_sold -= remaining
-                remaining = 0
-                break
-
-        row.total_quantity_sold = max(0, row.total_quantity_sold - row.last_known_quantity)
-
-    row.ended_reason = "shop_removed"
-    row.status = "shop_removed"
-    session.flush()
-    return row
-
-
-def restore_my_listing_session(session: Session, session_id: int) -> MyListingSession:
-    """Reverses dismiss_my_listing_session. Does not retroactively re-run sync -- the next
-    collector cycle will resume updating it normally if the underlying listing is still
-    being observed.
-    """
-    row = session.get(MyListingSession, session_id)
-    if row is None:
-        raise ValueError(f"My listing session {session_id} not found")
-    row.dismissed = False
-    row.dismissed_at = None
-    session.flush()
-    return row
 
 
 # ── Watch rules / notifications -- ported price watcher, see notifications/ ───

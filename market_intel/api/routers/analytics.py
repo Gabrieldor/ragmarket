@@ -1,6 +1,6 @@
 import statistics
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -10,6 +10,7 @@ from api.schemas import (
     CurrentSnapshotOut,
     HourOfDayStatOut,
     ListingHistoryOut,
+    MapCountOut,
     MapStatOut,
     OutlierObservationOut,
     SaleEventOut,
@@ -17,6 +18,8 @@ from api.schemas import (
     SalesByHourMapOut,
     SalesByHourOut,
     SellerStatOut,
+    ThresholdBreakdownOut,
+    ThresholdSideOut,
     TrendOut,
     WeekdayStatOut,
     WeekendComparisonOut,
@@ -702,3 +705,88 @@ def list_outliers(
             price_multiple=round(obs.price / median, 1) if median else 0.0,
         ))
     return results
+
+
+def _brazil_window(target_date: date, hour: int | None) -> tuple[datetime, datetime]:
+    """UTC [start, end) window corresponding to the given Brazil-local (UTC-3) date, or a
+    single hour within it if `hour` is given. Same offset convention as sales_by_hour /
+    sales_by_hour_by_map, where `brt = utc_timestamp - timedelta(hours=3)`.
+    """
+    day_start_utc = datetime.combine(target_date, time.min) + timedelta(hours=3)
+    if hour is not None:
+        start = day_start_utc + timedelta(hours=hour)
+        end = start + timedelta(hours=1)
+    else:
+        start = day_start_utc
+        end = day_start_utc + timedelta(days=1)
+    return start, end
+
+
+def _map_counts(counts: dict[str, int]) -> list[MapCountOut]:
+    return [
+        MapCountOut(map_name=map_name, count=count)
+        for map_name, count in sorted(counts.items(), key=lambda kv: -kv[1])
+    ]
+
+
+@router.get("/{item_id}/threshold-breakdown", response_model=ThresholdBreakdownOut)
+def threshold_breakdown(
+    item_id: int,
+    date: date = Query(...),
+    hour: int | None = Query(default=None, ge=0, le=23),
+    avail_op: str = Query(...),
+    avail_price: float = Query(...),
+    sold_op: str = Query(...),
+    sold_price: float = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Counts of listings/sales above or below a given price threshold within a date (and
+    optional hour) window, broken down by canonical map name -- for the data-analysis page's
+    threshold exploration view.
+    """
+    start, end = _brazil_window(date, hour)
+    alias_lookup = get_map_alias_lookup(db)
+
+    def _cmp(op: str, value, threshold):
+        if op == "above":
+            return value > threshold
+        if op == "below":
+            return value < threshold
+        raise ValueError(f"invalid op: {op!r}")
+
+    available_by_map: dict[str, int] = defaultdict(int)
+    available_total = 0
+    for obs in db.scalars(
+        select(ListingObservation).where(
+            ListingObservation.tracked_item_id == item_id,
+            ListingObservation.observed_at >= start,
+            ListingObservation.observed_at < end,
+        )
+    ):
+        if not _cmp(avail_op, obs.price, avail_price):
+            continue
+        raw_name = obs.map_name or "unknown"
+        canonical = alias_lookup.get(raw_name, raw_name)
+        available_by_map[canonical] += 1
+        available_total += 1
+
+    sold_by_map: dict[str, int] = defaultdict(int)
+    sold_total = 0
+    for event in db.scalars(
+        select(SaleEvent).where(
+            SaleEvent.tracked_item_id == item_id,
+            SaleEvent.sale_attributed_at >= start,
+            SaleEvent.sale_attributed_at < end,
+        )
+    ):
+        if event.price is None or not _cmp(sold_op, event.price, sold_price):
+            continue
+        raw_name = event.map_name or "unknown"
+        canonical = alias_lookup.get(raw_name, raw_name)
+        sold_by_map[canonical] += 1
+        sold_total += 1
+
+    return ThresholdBreakdownOut(
+        available=ThresholdSideOut(total=available_total, by_map=_map_counts(available_by_map)),
+        sold=ThresholdSideOut(total=sold_total, by_map=_map_counts(sold_by_map)),
+    )

@@ -51,7 +51,6 @@ from db.repository import (  # noqa: E402
     list_tracked_items,
     set_collector_status,
     start_scrape_run,
-    sync_my_listing_sessions,
     upsert_shop_location,
 )
 from collector.rollup_jobs import run_rollup_for_date  # noqa: E402
@@ -195,7 +194,6 @@ async def _scrape_one_item(
 
         insert_observations(session, observations)
         infer_and_persist_sales(session, item.id)
-        sync_my_listing_sessions(session, item.id)
         if item.sold_out_enabled:
             infer_and_persist_sold_out(session, item.id)
 

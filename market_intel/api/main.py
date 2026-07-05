@@ -11,7 +11,6 @@ from api.routers import (  # noqa: E402
     analytics,
     items,
     map_aliases,
-    my_sales,
     notifications,
     observations,
     scraper_config,
@@ -33,7 +32,6 @@ app.include_router(items.router)
 app.include_router(observations.router)
 app.include_router(analytics.router)
 app.include_router(status.router)
-app.include_router(my_sales.router)
 app.include_router(sold_out.router)
 app.include_router(notifications.router)
 app.include_router(map_aliases.router)
