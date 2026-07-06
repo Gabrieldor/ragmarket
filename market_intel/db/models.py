@@ -356,6 +356,12 @@ class WatchRule(Base):
     required_refine: Mapped[int | None] = mapped_column(Integer, nullable=True)
     required_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     required_map: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Comma-separated, lowercase, no spaces (e.g. "auction_02,prt_fild08") -- maps to skip
+    # entirely when evaluating this rule, regardless of price.
+    excluded_maps: Mapped[str | None] = mapped_column(String, nullable=True)
+    # When set (only meaningful for operator '<'), the total quantity available at/below
+    # the rule's price bound must also be >= this value for the condition to be met.
+    required_min_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now

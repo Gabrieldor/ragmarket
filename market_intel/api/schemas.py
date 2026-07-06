@@ -376,6 +376,8 @@ class WatchRuleOut(BaseModel):
     required_refine: int | None
     required_slot: int | None
     required_map: str | None
+    excluded_maps: str | None
+    required_min_qty: int | None
     is_active: bool
     state_active: bool
     last_price: int | None

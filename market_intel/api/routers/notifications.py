@@ -13,7 +13,6 @@ from db.models import NotificationSettings, WatchRule
 from db.repository import (
     add_watch_rule,
     delete_watch_rule,
-    find_tracked_item_by_name,
     get_notification_settings,
     list_notification_events,
     list_watch_rules,
@@ -56,20 +55,14 @@ def get_watch_rules(active_only: bool = False, db: Session = Depends(get_db)):
 @router.post("/watch-rules", response_model=WatchRuleOut, status_code=201)
 def create_watch_rule(payload: WatchRuleCreate, db: Session = Depends(get_db)):
     try:
-        item_name, operator, target_price, required_refine, required_slot, required_map = parse_rule(
-            payload.raw
-        )
-        if required_map is not None and find_tracked_item_by_name(db, item_name) is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Map filtering requires '{item_name}' to be an actively tracked item "
-                    "(add it on the Items page first)."
-                ),
-            )
+        (
+            item_name, operator, target_price, required_refine, required_slot,
+            required_map, excluded_maps, required_min_qty,
+        ) = parse_rule(payload.raw)
         rule = add_watch_rule(
             db, raw=payload.raw.strip(), item_name=item_name, operator=operator, target_price=target_price,
             required_refine=required_refine, required_slot=required_slot, required_map=required_map,
+            excluded_maps=excluded_maps, required_min_qty=required_min_qty,
         )
         db.commit()
         return rule

@@ -21,6 +21,7 @@ collector/runner.py).
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -29,9 +30,28 @@ from sqlalchemy.orm import Session
 
 from db.models import NotificationEvent, NotificationSettings, WatchRule
 from db.repository import find_tracked_item_by_name, get_latest_observations, get_map_alias_lookup
-from scraper_adapter.location_action import parse_item_name_title
+from scraper_adapter.location_action import ShopLocationDetail, parse_item_name_title
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RuleListing:
+    """Normalizes the 3 different listing shapes this module deals with -- live
+    ``DetailedListing`` (scraper_adapter.provider_adapter), DB ``ListingObservation`` rows,
+    and refine/slot modal-verified ``(listing, location)`` pairs -- into one uniform type
+    before calling ``evaluate_rule``, so location data flows through the same way regardless
+    of which path fetched it.
+    """
+
+    price: int
+    quantity: int
+    map_name: str | None = None
+    x_pos: int | None = None
+    y_pos: int | None = None
+    seller_name: str | None = None
+    shop_name: str | None = None
+    ssi: str | None = None
 
 
 def _bounds(target_price: int, variance_percent: float) -> tuple[int, int]:
@@ -54,58 +74,79 @@ def _fetch_map_filtered_listings(
     rule: WatchRule,
     session: Session,
     alias_lookup_ci: dict[str, str],
-) -> list:
-    """Map-only rules (``required_map`` set, no refine/slot) never hit the live site --
-    map data only exists in the DB for actively tracked items (populated by the regular
-    tracked-item scrape cycle), so this reads the rule's resolved TrackedItem's most recent
-    scrape run's observations instead, filtered down to the ones on the required map.
+    excluded_set: set[str],
+) -> list[RuleListing]:
+    """Map-filtered rules (``required_map`` and/or ``excluded_maps`` set, no refine/slot)
+    never hit the live site -- map data only exists in the DB for actively tracked items
+    (populated by the regular tracked-item scrape cycle), so this reads the rule's resolved
+    TrackedItem's most recent scrape run's observations instead, filtered down to the ones
+    on the required map (if set) and not on an excluded map.
     """
     tracked_item = find_tracked_item_by_name(session, rule.item_name)
     if tracked_item is None:
         logger.warning(
-            "[%s] required_map set but '%s' is no longer a tracked item -- skipping.",
-            rule.raw, rule.item_name,
+            "[%s] required_map/excluded_maps set but '%s' is no longer a tracked item -- "
+            "skipping.", rule.raw, rule.item_name,
         )
         return []
 
     observations = get_latest_observations(session, tracked_item.id)
-    target_map = _canonical_map(rule.required_map, alias_lookup_ci)
-    return [
-        obs for obs in observations
-        if _canonical_map(obs.map_name, alias_lookup_ci) == target_map
-    ]
+    target_map = _canonical_map(rule.required_map, alias_lookup_ci) if rule.required_map else None
+    canonical_excluded = {_canonical_map(m, alias_lookup_ci) for m in excluded_set}
+    results = []
+    for obs in observations:
+        canonical = _canonical_map(obs.map_name, alias_lookup_ci)
+        if target_map is not None and canonical != target_map:
+            continue
+        if canonical is not None and canonical in canonical_excluded:
+            continue
+        results.append(
+            RuleListing(
+                price=obs.price,
+                quantity=obs.quantity,
+                map_name=obs.map_name,
+                x_pos=obs.x_pos,
+                y_pos=obs.y_pos,
+                seller_name=obs.seller_name,
+                shop_name=obs.shop_name,
+                ssi=obs.ssi,
+            )
+        )
+    return results
 
 
 def evaluate_rule(
     rule: WatchRule,
-    listings: list,
+    listings: list[RuleListing],
     variance_percent: float,
     min_items_below: int,
-) -> tuple[bool, Optional[int]]:
+) -> tuple[bool, Optional[RuleListing]]:
     """Check whether a watch rule's condition is satisfied.
 
     Returns:
-        (condition_met, cheapest_price)
+        (condition_met, cheapest_listing)
 
-    The reported price is always the cheapest listing found, regardless of operator *and*
+    The reported listing is always the cheapest one found, regardless of operator *and*
     regardless of whether the condition is met -- callers that only care about
     notification-worthy transitions can ignore it when condition_met is False, but the
     dashboard's "current price" display needs the real market price even when nothing has
     triggered yet.
 
-    ``listings`` accepts anything with ``.price``/``.quantity`` attributes (e.g.
-    data_provider.Listing or a plain test double).
+    ``listings`` is a list of ``RuleListing``.
     """
     if not listings:
         return False, None
 
     lower, upper = _bounds(rule.target_price, variance_percent)
-    cheapest = min(l.price for l in listings)
+    cheapest = min(listings, key=lambda l: l.price)
 
     if rule.operator == '<':
-        condition_met = cheapest <= upper
+        condition_met = cheapest.price <= upper
+        if condition_met and rule.required_min_qty is not None:
+            supply_at_or_below = sum(l.quantity for l in listings if l.price <= upper)
+            condition_met = supply_at_or_below >= rule.required_min_qty
     elif min_items_below == 0:
-        condition_met = cheapest >= lower
+        condition_met = cheapest.price >= lower
     else:
         supply_below = sum(l.quantity for l in listings if l.price < rule.target_price)
         logger.debug(
@@ -117,34 +158,32 @@ def evaluate_rule(
     return condition_met, cheapest
 
 
-async def _fetch_refine_slot_matched_listings(
+async def _fetch_verified_listings(
     rule: WatchRule,
     provider,
     config: NotificationSettings,
     alias_lookup_ci: dict[str, str],
-) -> list:
+    excluded_set: set[str],
+) -> list[RuleListing]:
     """Re-scrape ``rule``'s listings through their shop-location modal to verify the
-    actual refine level / slot count, keeping only listings matching
-    ``rule.required_refine``/``rule.required_slot``. Only called when at least one of
-    those is set on the rule -- rules without them never pay this cost (see
-    ``check_watch_rules``).
-
-    If ``rule.required_map`` is also set, the modal's ``location.map_name`` (already being
-    fetched anyway for the refine/slot check, so this is free) is canonicalized the same
-    way and must match too, or the candidate is rejected.
+    actual refine level / slot count and/or map, keeping only listings that satisfy every
+    constraint the rule sets. Only called when at least one of required_refine/
+    required_slot/required_map/excluded_maps is set on the rule -- rules without any of
+    those never pay this cost (see ``check_watch_rules``). If refine/slot are both None,
+    those checks simply no-op.
 
     Requires ``provider.scrape_item()`` (``DetailedListingProvider`` -- carries
     ``dom_index`` so a matching card can be clicked). Candidates are limited to listings
     priced at or below the rule's upper variance bound, mirroring the price-threshold
-    selection ``evaluate_rule`` already applies, so refine/slot verification doesn't have
-    to open every card on the page -- only the ones that could plausibly matter.
-    Throttling between modal clicks is handled inside ``scrape_item`` itself
-    (``location_click_delay_seconds``), same as the tracked-item location lookups.
+    selection ``evaluate_rule`` already applies, so verification doesn't have to open every
+    card on the page -- only the ones that could plausibly matter. Throttling between modal
+    clicks is handled inside ``scrape_item`` itself (``location_click_delay_seconds``), same
+    as the tracked-item location lookups.
     """
     if not hasattr(provider, "scrape_item"):
         logger.warning(
-            "[%s] required_refine/required_slot set but provider has no scrape_item() -- "
-            "skipping refine/slot verification.", rule.raw,
+            "[%s] required_refine/required_slot/required_map/excluded_maps set but "
+            "provider has no scrape_item() -- skipping verification.", rule.raw,
         )
         return []
 
@@ -162,30 +201,88 @@ async def _fetch_refine_slot_matched_listings(
         max_pages=config.max_pages,
     )
 
-    matched = []
+    canonical_excluded = {_canonical_map(m, alias_lookup_ci) for m in excluded_set}
+    needs_title = rule.required_refine is not None or rule.required_slot is not None
+
+    matched: list[RuleListing] = []
     for listing, location in detailed:
         if not _needs_check(listing):
-            # Not a price candidate -- refine/slot was never looked up for it.
+            # Not a price candidate -- location was never looked up for it.
             continue
-        if location is None or location.item_name_title is None:
+        if location is None:
+            logger.debug(
+                "[%s] could not verify a candidate listing (no location) -- skipping it.",
+                rule.raw,
+            )
+            continue
+        if needs_title and location.item_name_title is None:
             logger.debug(
                 "[%s] could not verify refine/slot for a candidate listing -- skipping it.",
                 rule.raw,
             )
             continue
-        actual_refine, actual_slot = parse_item_name_title(location.item_name_title)
-        if rule.required_refine is not None and actual_refine != rule.required_refine:
-            continue
-        if rule.required_slot is not None and actual_slot != rule.required_slot:
-            continue
+        if needs_title:
+            actual_refine, actual_slot = parse_item_name_title(location.item_name_title)
+            if rule.required_refine is not None and actual_refine != rule.required_refine:
+                continue
+            if rule.required_slot is not None and actual_slot != rule.required_slot:
+                continue
+        actual_map = _canonical_map(location.map_name, alias_lookup_ci)
         if rule.required_map is not None:
-            actual_map = _canonical_map(location.map_name, alias_lookup_ci)
             target_map = _canonical_map(rule.required_map, alias_lookup_ci)
             if actual_map != target_map:
                 continue
-        matched.append(listing)
+        if actual_map is not None and actual_map in canonical_excluded:
+            continue
+        matched.append(
+            RuleListing(
+                price=listing.price,
+                quantity=listing.quantity,
+                map_name=location.map_name,
+                x_pos=location.x_pos,
+                y_pos=location.y_pos,
+                seller_name=location.seller_name or getattr(listing, "seller_name", None),
+                shop_name=getattr(listing, "shop_name", None),
+                ssi=getattr(listing, "ssi", None),
+            )
+        )
 
     return matched
+
+
+async def _fetch_location_for_notification(
+    rule: WatchRule,
+    cheapest: RuleListing,
+    provider,
+    config: NotificationSettings,
+) -> ShopLocationDetail | None:
+    """Resolves a location for a plain-rule notification (Feature A) -- the plain-rule path
+    never fetches location during the check itself (to avoid needless site load per cycle),
+    so this does ONE targeted ``provider.scrape_item()`` call, matching the cheapest
+    listing by ``ssi`` if available, else by exact price. Only paid at the moment of firing
+    a notification (rare), not on every check cycle.
+    """
+    if not hasattr(provider, "scrape_item"):
+        return None
+
+    def _is_match(listing) -> bool:
+        if cheapest.ssi is not None:
+            return getattr(listing, "ssi", None) == cheapest.ssi
+        return listing.price == cheapest.price
+
+    detailed = await provider.scrape_item(
+        item_name=rule.item_name,
+        store_type=config.store_type,
+        server_type=config.server_type,
+        needs_location=_is_match,
+        sort="LOW_PRICE",
+        max_pages=config.max_pages,
+    )
+
+    for listing, location in detailed:
+        if _is_match(listing) and location is not None:
+            return location
+    return None
 
 
 async def check_watch_rules(
@@ -207,34 +304,68 @@ async def check_watch_rules(
         if index > 0:
             await asyncio.sleep(config.rule_delay_seconds)
 
-        map_only = (
-            rule.required_map is not None
-            and rule.required_refine is None
-            and rule.required_slot is None
-        )
-        if map_only:
-            listings = _fetch_map_filtered_listings(rule, session, alias_lookup_ci)
-        elif rule.required_refine is not None or rule.required_slot is not None:
-            listings = await _fetch_refine_slot_matched_listings(rule, provider, config, alias_lookup_ci)
-        else:
-            listings = await provider.get_listings(
-                item_name=rule.item_name,
-                store_type=config.store_type,
-                server_type=config.server_type,
-                sort="LOW_PRICE",
-                max_pages=config.max_pages,
+        excluded_set = set(rule.excluded_maps.split(",")) if rule.excluded_maps else set()
+        needs_refine_slot = rule.required_refine is not None or rule.required_slot is not None
+        needs_map = rule.required_map is not None or bool(excluded_set)
+
+        if needs_refine_slot:
+            listings = await _fetch_verified_listings(
+                rule, provider, config, alias_lookup_ci, excluded_set
             )
-        condition_met, best_price = evaluate_rule(
+        elif needs_map:
+            tracked_item = find_tracked_item_by_name(session, rule.item_name)
+            if tracked_item is not None:
+                listings = _fetch_map_filtered_listings(rule, session, alias_lookup_ci, excluded_set)
+            else:
+                listings = await _fetch_verified_listings(
+                    rule, provider, config, alias_lookup_ci, excluded_set
+                )
+        else:
+            listings = [
+                RuleListing(
+                    price=l.price,
+                    quantity=l.quantity,
+                    seller_name=getattr(l, "seller_name", None),
+                    shop_name=getattr(l, "shop_name", None),
+                    ssi=getattr(l, "ssi", None),
+                )
+                for l in await provider.get_listings(
+                    item_name=rule.item_name,
+                    store_type=config.store_type,
+                    server_type=config.server_type,
+                    sort="LOW_PRICE",
+                    max_pages=config.max_pages,
+                )
+            ]
+
+        condition_met, cheapest = evaluate_rule(
             rule, listings, config.variance_percent, config.min_items_below
         )
+        best_price = cheapest.price if cheapest else None
         rule.last_checked_price = best_price
         rule.last_checked_at = datetime.now()
+
+        async def _resolve_location() -> ShopLocationDetail | None:
+            """Location for the notification (Feature A) -- built directly from the
+            cheapest listing if already known (map-only/verified-live paths), else fetched
+            with one targeted live lookup (plain-rule path never fetches location during
+            the check itself).
+            """
+            if cheapest is None:
+                return None
+            if cheapest.map_name is not None:
+                return ShopLocationDetail(
+                    map_name=cheapest.map_name, x_pos=cheapest.x_pos, y_pos=cheapest.y_pos,
+                    seller_name=cheapest.seller_name, server_name=None,
+                )
+            return await _fetch_location_for_notification(rule, cheapest, provider, config)
 
         if condition_met and not rule.state_active:
             rule.state_active = True
             rule.last_price = best_price
             session.add(NotificationEvent(watch_rule_id=rule.id, event_type="triggered", price=best_price))
-            await notifier.send_triggered(rule, best_price)
+            location = await _resolve_location()
+            await notifier.send_triggered(rule, best_price, location=location)
             fired += 1
 
         elif not condition_met and rule.state_active:
@@ -256,7 +387,8 @@ async def check_watch_rules(
                     price=best_price, old_price=old_price,
                 )
             )
-            await notifier.send_price_changed(rule, old_price, best_price)
+            location = await _resolve_location()
+            await notifier.send_price_changed(rule, old_price, best_price, location=location)
             fired += 1
 
         # Commit per rule, not just flush -- this loop spans multiple slow network scrapes

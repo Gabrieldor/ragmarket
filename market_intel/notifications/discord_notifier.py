@@ -93,12 +93,33 @@ class DiscordNotifier:
         symbol = ">=" if rule.operator == ">" else "<="
         return f"{rule.item_name} {symbol} {_fmt(rule.target_price)}"
 
-    async def send_triggered(self, rule, price: int) -> None:
+    def _location_block(self, location) -> str:
+        """Formats an optional ``**Location:**`` block (Feature A). ``location`` accepts
+        anything with ``.map_name``/``.x_pos``/``.y_pos``/``.seller_name`` attributes, or
+        ``None``. Returns an empty string when there's nothing to show (no location, or a
+        location with no map name).
+        """
+        if location is None or getattr(location, "map_name", None) is None:
+            return ""
+        map_name = location.map_name
+        x_pos = getattr(location, "x_pos", None)
+        y_pos = getattr(location, "y_pos", None)
+        seller_name = getattr(location, "seller_name", None)
+
+        line = map_name
+        if x_pos is not None and y_pos is not None:
+            line += f" ({x_pos}/{y_pos})"
+        if seller_name:
+            line += f" — seller: {seller_name}"
+        return f"\n\n**Location:**\n{line}"
+
+    async def send_triggered(self, rule, price: int, location=None) -> None:
         msg = (
             f"{self.user_mention}\n\n"
             f"🚨 **{rule.item_name}** condition triggered.\n\n"
             f"**Condition:**\n{self._condition_line(rule)}\n\n"
             f"**Matching price:**\n{_fmt(price)}"
+            f"{self._location_block(location)}"
         )
         await self._queue.put(msg)
         logger.info("[TRIGGERED] %s -- price %s", rule.raw, _fmt(price))
@@ -112,13 +133,16 @@ class DiscordNotifier:
         await self._queue.put(msg)
         logger.info("[CLEARED] %s", rule.raw)
 
-    async def send_price_changed(self, rule, old_price: Optional[int], new_price: int) -> None:
+    async def send_price_changed(
+        self, rule, old_price: Optional[int], new_price: int, location=None
+    ) -> None:
         direction = "📈" if new_price > (old_price or 0) else "📉"
         msg = (
             f"{self.user_mention}\n\n"
             f"{direction} **{rule.item_name}** price changed.\n\n"
             f"**Previous:**\n{_fmt(old_price) if old_price is not None else 'N/A'}\n\n"
             f"**Current:**\n{_fmt(new_price)}"
+            f"{self._location_block(location)}"
         )
         await self._queue.put(msg)
         logger.info("[PRICE CHANGE] %s -- %s -> %s", rule.raw, _fmt(old_price or 0), _fmt(new_price))

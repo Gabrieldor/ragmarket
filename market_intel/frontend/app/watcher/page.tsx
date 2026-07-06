@@ -132,7 +132,9 @@ export default function WatcherPage() {
         <p className="text-muted-foreground text-sm mt-1">
           Watch rules for price/supply alerts (e.g. "Elunium &gt; 30000"), checked every
           collector cycle before the market intel scrape. Notifications are sent via Discord
-          or a local sound beep, per the settings below.
+          or a local sound beep, per the settings below. Also supports "+7 Item [1] @map
+          !excludedmap #200 &lt; 25kk" style tokens for refine level, slot count,
+          required/excluded maps, and minimum quantity.
         </p>
       </div>
 

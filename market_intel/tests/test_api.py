@@ -769,7 +769,7 @@ def test_notification_events_endpoint_filters_by_rule(session, client):
             return [_Listing(1100, 5)]
 
     class _FakeNotifier:
-        async def send_triggered(self, rule, price):
+        async def send_triggered(self, rule, price, location=None):
             pass
 
     import asyncio
