@@ -375,14 +375,16 @@ async def check_watch_rules(
             fired += 1
 
         elif not condition_met and rule.state_active:
+            # State still transitions and the event is still recorded (for the watcher
+            # page's history/audit trail) -- only the Discord/sound notification itself is
+            # skipped, since the user only wants to be alerted when a condition becomes
+            # true, not when it stops being true.
             old_price = rule.last_price
             rule.state_active = False
             rule.last_price = None
             session.add(
                 NotificationEvent(watch_rule_id=rule.id, event_type="cleared", old_price=old_price)
             )
-            await notifier.send_cleared(rule)
-            fired += 1
 
         elif condition_met and rule.state_active and best_price != rule.last_price:
             old_price = rule.last_price

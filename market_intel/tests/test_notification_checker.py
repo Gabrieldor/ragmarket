@@ -1,6 +1,8 @@
 import asyncio
 from dataclasses import dataclass
 
+from sqlalchemy import select
+
 from db.models import ListingObservation, NotificationEvent, NotificationSettings, ScrapeRun, TrackedItem, WatchRule
 from notifications.checker import RuleListing, check_watch_rules, evaluate_rule
 
@@ -178,7 +180,11 @@ def test_check_watch_rules_silent_while_condition_holds_steady(session):
     assert notifier.sent == []
 
 
-def test_check_watch_rules_fires_cleared_when_condition_no_longer_met(session):
+def test_check_watch_rules_clears_state_silently_when_condition_no_longer_met(session):
+    """The 'cleared' transition still updates state and is still recorded as a
+    NotificationEvent (for the watcher page's history), but no notification is sent --
+    the user only wants to be alerted when a condition becomes true, not when it stops.
+    """
     rule = WatchRule(
         raw="Elunium > 1000", item_name="Elunium", operator=">", target_price=1000,
         state_active=True, last_price=1100,
@@ -191,10 +197,13 @@ def test_check_watch_rules_fires_cleared_when_condition_no_longer_met(session):
     fired = asyncio.run(check_watch_rules(session, provider, notifier, _config()))
     session.commit()
 
-    assert fired == 1
-    assert notifier.sent == [("cleared", "Elunium > 1000", None, None)]
+    assert fired == 0
+    assert notifier.sent == []
     assert rule.state_active is False
     assert rule.last_price is None
+
+    event = session.scalar(select(NotificationEvent).where(NotificationEvent.watch_rule_id == rule.id))
+    assert event.event_type == "cleared"
 
 
 def test_check_watch_rules_fires_price_changed_while_still_active(session):
