@@ -40,7 +40,11 @@ _EXTRACT_MODAL_JS = """
         if (coordSpan) coordSpan.remove();
         result[label.textContent.trim()] = { value: clone.textContent.trim(), coords };
     });
-    const titleEl = document.querySelector('h3');
+    // Not `document.querySelector('h3')` -- that grabs the first <h3> in the whole
+    // document, which is a background search-card title (no refine/slot prefix) since
+    // the modal renders on top of, not instead of, the card list. The modal's own item
+    // name (with "+7"/"[1]" prefix/suffix) lives in this more specific class instead.
+    const titleEl = document.querySelector('[class*="style_item_name__"]');
     result.itemNameTitle = titleEl ? titleEl.textContent.trim() : null;
     return result;
 }
