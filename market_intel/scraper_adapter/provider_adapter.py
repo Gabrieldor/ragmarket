@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # After this many consecutive location-lookup failures within one item, stop trying for the
 # rest of that item's listings rather than retrying every remaining one at full timeout --
 # guards against one stuck modal/overlay cascading into burning the whole cycle's time budget.
-LOCATION_FAILURE_CIRCUIT_BREAKER = 2
+LOCATION_FAILURE_CIRCUIT_BREAKER = 4
 
 
 @dataclass
