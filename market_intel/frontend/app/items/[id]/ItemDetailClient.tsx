@@ -69,8 +69,11 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
   const [trend, setTrend] = useState<Trend | null>(null);
   const [soldOutEvents, setSoldOutEvents] = useState<SoldOutEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [start, setStart] = useState<string>("");
+  const [end, setEnd] = useState<string>("");
 
   useEffect(() => {
+    const range = { start: start || undefined, end: end || undefined };
     api
       .listItems()
       .then((list) => {
@@ -79,15 +82,15 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
       })
       .catch((err) => setError(String(err)));
     api.currentSnapshot(itemId).then(setSnapshot).catch((err) => setError(String(err)));
-    api.hourly(itemId).then(setHourly).catch((err) => setError(String(err)));
-    api.weekday(itemId).then(setWeekday).catch((err) => setError(String(err)));
-    api.weekendVsWeekday(itemId).then(setWeekendCmp).catch((err) => setError(String(err)));
-    api.sellers(itemId).then(setSellers).catch((err) => setError(String(err)));
-    api.mapAnalysis(itemId).then(setMapStats).catch((err) => setError(String(err)));
-    api.salesByHour(itemId).then(setSalesByHour).catch((err) => setError(String(err)));
+    api.hourly(itemId, range).then(setHourly).catch((err) => setError(String(err)));
+    api.weekday(itemId, range).then(setWeekday).catch((err) => setError(String(err)));
+    api.weekendVsWeekday(itemId, range).then(setWeekendCmp).catch((err) => setError(String(err)));
+    api.sellers(itemId, range).then(setSellers).catch((err) => setError(String(err)));
+    api.mapAnalysis(itemId, range).then(setMapStats).catch((err) => setError(String(err)));
+    api.salesByHour(itemId, range).then(setSalesByHour).catch((err) => setError(String(err)));
     api.trend(itemId, 30).then(setTrend).catch((err) => setError(String(err)));
     api.listSoldOutEvents(itemId).then(setSoldOutEvents).catch((err) => setError(String(err)));
-  }, [itemId]);
+  }, [itemId, start, end]);
 
   if (error) return <p className="text-destructive">{error}</p>;
 
@@ -128,6 +131,40 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
             {item.server_name} · {item.store_type} · {item.is_active ? "active" : "paused"}
           </p>
         )}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col text-xs text-muted-foreground gap-1">
+          From
+          <input
+            type="date"
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+            className="border border-border rounded px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-muted-foreground gap-1">
+          To
+          <input
+            type="date"
+            value={end}
+            onChange={(e) => setEnd(e.target.value)}
+            className="border border-border rounded px-2 py-1 text-sm"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setStart("");
+            setEnd("");
+          }}
+          className="border border-border rounded px-3 py-1 text-sm hover:bg-muted"
+        >
+          Clear
+        </button>
+        <p className="text-muted-foreground text-xs">
+          Date filter applies to the charts and tables below; current market snapshot and trend always reflect the latest data / their own fixed window.
+        </p>
       </div>
 
       <section>

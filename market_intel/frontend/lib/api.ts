@@ -323,11 +323,28 @@ export const api = {
     return apiFetch<Observation[]>(`/observations?${qs.toString()}`);
   },
 
-  hourly: (itemId: number) => apiFetch<HourOfDayStat[]>(`/analytics/${itemId}/hourly`),
+  hourly: (itemId: number, params: { start?: string; end?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<HourOfDayStat[]>(`/analytics/${itemId}/hourly${suffix}`);
+  },
   currentSnapshot: (itemId: number) => apiFetch<CurrentSnapshot>(`/analytics/${itemId}/current`),
-  weekday: (itemId: number) => apiFetch<WeekdayStat[]>(`/analytics/${itemId}/weekday`),
-  weekendVsWeekday: (itemId: number) =>
-    apiFetch<WeekendComparison>(`/analytics/${itemId}/weekend-vs-weekday`),
+  weekday: (itemId: number, params: { start?: string; end?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<WeekdayStat[]>(`/analytics/${itemId}/weekday${suffix}`);
+  },
+  weekendVsWeekday: (itemId: number, params: { start?: string; end?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<WeekendComparison>(`/analytics/${itemId}/weekend-vs-weekday${suffix}`);
+  },
   mapAnalysis: (itemId: number, params: { start?: string; end?: string } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
@@ -335,7 +352,13 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<MapStat[]>(`/analytics/${itemId}/map${suffix}`);
   },
-  salesByHour: (itemId: number) => apiFetch<SalesByHour[]>(`/analytics/${itemId}/sales-by-hour`),
+  salesByHour: (itemId: number, params: { start?: string; end?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<SalesByHour[]>(`/analytics/${itemId}/sales-by-hour${suffix}`);
+  },
   salesByHourByMap: (itemId: number, params: { start?: string; end?: string } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
@@ -343,7 +366,13 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<SalesByHourMap[]>(`/analytics/${itemId}/sales-by-hour-map${suffix}`);
   },
-  sellers: (itemId: number) => apiFetch<SellerStat[]>(`/analytics/${itemId}/sellers`),
+  sellers: (itemId: number, params: { start?: string; end?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<SellerStat[]>(`/analytics/${itemId}/sellers${suffix}`);
+  },
   listingHistory: (itemId: number) => apiFetch<ListingHistory[]>(`/analytics/${itemId}/listing-history`),
   trend: (itemId: number, days = 30) =>
     apiFetch<Trend>(`/analytics/${itemId}/trend?days=${days}`),
