@@ -36,16 +36,21 @@ function SalesByHourTooltip({
   label,
 }: {
   active?: boolean;
-  payload?: { payload: { estimated_units_sold: number; estimated_revenue: number } }[];
+  payload?: { payload: { estimated_units_sold: number; median_sale_price: number | null } }[];
   label?: string;
 }) {
   if (!active || !payload || !payload.length) return null;
-  const { estimated_units_sold, estimated_revenue } = payload[0].payload;
+  const { estimated_units_sold, median_sale_price } = payload[0].payload;
   return (
     <div className="bg-background border border-border rounded p-2 text-xs shadow">
       <p className="font-semibold mb-1">{label}</p>
       <p>Avg est. units sold: {estimated_units_sold.toFixed(1)}</p>
-      <p>Avg est. revenue: {estimated_revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+      <p>
+        Median sale price:{" "}
+        {median_sale_price != null
+          ? median_sale_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : "—"}
+      </p>
     </div>
   );
 }
@@ -92,11 +97,11 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
   const salesByHourChartData = Array.from({ length: 24 }, (_, hour) => ({
     label: `${hour}:00`,
     estimated_units_sold: salesByHourMap.get(hour)?.estimated_units_sold ?? 0,
-    estimated_revenue: salesByHourMap.get(hour)?.estimated_revenue ?? 0,
+    median_sale_price: salesByHourMap.get(hour)?.median_sale_price ?? null,
   }));
 
   const cheapestHour = hourly.length
-    ? hourly.reduce((min, h) => (h.avg_price < min.avg_price ? h : min))
+    ? hourly.reduce((min, h) => (h.median_price < min.median_price ? h : min))
     : null;
 
   return (
@@ -161,7 +166,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Cheapest hour (avg)"
-          value={cheapestHour ? `${cheapestHour.hour}:00 — ${Math.round(cheapestHour.avg_price)}` : "—"}
+          value={cheapestHour ? `${cheapestHour.hour}:00 — ${Math.round(cheapestHour.median_price)}` : "—"}
         />
         <StatCard
           title="Weekend vs weekday"
@@ -190,7 +195,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} domain={["auto", "auto"]} />
               <Tooltip />
-              <Line type="monotone" dataKey="avg_price" stroke="var(--color-primary)" dot={false} name="Avg price" />
+              <Line type="monotone" dataKey="median_price" stroke="var(--color-primary)" dot={false} name="Median price" />
               <Line
                 type="monotone"
                 dataKey="min_price"
@@ -242,7 +247,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={12} domain={["auto", "auto"]} />
               <Tooltip />
-              <Bar dataKey="avg_price" fill="var(--color-primary)" name="Avg price" />
+              <Bar dataKey="median_price" fill="var(--color-primary)" name="Median price" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -265,14 +270,14 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
               <tr key={s.seller_name} className="border-t border-border hover:bg-muted/50">
                 <td className="px-3 py-2 font-medium">{s.seller_name}</td>
                 <td className="px-3 py-2">{s.total_quantity}</td>
-                <td className="px-3 py-2">{Math.round(s.avg_price)}</td>
+                <td className="px-3 py-2">{Math.round(s.median_price)}</td>
                 <td
                   className={
-                    s.avg_deviation_from_daily_avg < 0 ? "px-3 py-2 text-green-700" : "px-3 py-2 text-foreground"
+                    s.median_deviation_from_daily_median < 0 ? "px-3 py-2 text-green-700" : "px-3 py-2 text-foreground"
                   }
                 >
-                  {s.avg_deviation_from_daily_avg > 0 ? "+" : ""}
-                  {Math.round(s.avg_deviation_from_daily_avg)}
+                  {s.median_deviation_from_daily_median > 0 ? "+" : ""}
+                  {Math.round(s.median_deviation_from_daily_median)}
                 </td>
               </tr>
             ))}
@@ -305,12 +310,12 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
             {mapStats.map((m) => (
               <tr key={m.map_name} className="border-t border-border hover:bg-muted/50">
                 <td className="px-3 py-2 font-medium">{m.map_name}</td>
-                <td className="px-3 py-2">{Math.round(m.avg_price)}</td>
+                <td className="px-3 py-2">{Math.round(m.median_price)}</td>
                 <td className="px-3 py-2">{m.current_listing_count}</td>
                 <td className="px-3 py-2">{m.current_quantity}</td>
                 <td className="px-3 py-2">{m.today_units_sold}</td>
                 <td className="px-3 py-2">
-                  {m.avg_sale_price != null ? Math.round(m.avg_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
+                  {m.median_sale_price != null ? Math.round(m.median_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
                 </td>
               </tr>
             ))}

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from db.models import CollectorStatus, DailyStat, ListingObservation, MapStat, ScrapeRun
+from db.models import CollectorStatus, ListingObservation, MapStat, ScrapeRun
 from db.repository import add_tracked_item, infer_and_persist_sales, infer_and_persist_sold_out
 
 
@@ -75,16 +75,19 @@ def test_observations_filter_by_item(session, client):
 
 def test_weekend_vs_weekday_endpoint(session, client):
     item = add_tracked_item(session, item_name="Elunium")
+    run = ScrapeRun(status="success")
+    session.add(run)
+    session.flush()
     session.add_all([
-        DailyStat(
-            tracked_item_id=item.id, date="2026-01-05", weekday=0, is_weekend=False,
-            avg_price=100, median_price=100, min_price=100, max_price=100,
-            total_quantity=10, listing_count=5,
+        # Monday (weekday=0): median price 100
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id,
+            observed_at=datetime(2026, 1, 5, 10, 0), price=100, quantity=5,
         ),
-        DailyStat(
-            tracked_item_id=item.id, date="2026-01-10", weekday=5, is_weekend=True,
-            avg_price=150, median_price=150, min_price=150, max_price=150,
-            total_quantity=10, listing_count=5,
+        # Saturday (weekday=5): median price 150
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id,
+            observed_at=datetime(2026, 1, 10, 10, 0), price=150, quantity=5,
         ),
     ])
     session.commit()
@@ -92,8 +95,8 @@ def test_weekend_vs_weekday_endpoint(session, client):
     resp = client.get(f"/analytics/{item.id}/weekend-vs-weekday")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["weekday_avg_price"] == 100
-    assert body["weekend_avg_price"] == 150
+    assert body["weekday_median_price"] == 100
+    assert body["weekend_median_price"] == 150
     assert body["percent_difference"] == 50.0
 
 
@@ -104,7 +107,7 @@ def test_trend_endpoint_no_data_returns_nulls(client):
     resp = client.get(f"/analytics/{item_id}/trend?days=30")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["recent_avg_price"] is None
+    assert body["recent_median_price"] is None
     assert body["percent_change"] is None
 
 

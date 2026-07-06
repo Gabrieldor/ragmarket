@@ -83,8 +83,8 @@ export type WeekdayStat = {
 };
 
 export type WeekendComparison = {
-  weekday_avg_price: number | null;
-  weekend_avg_price: number | null;
+  weekday_median_price: number | null;
+  weekend_median_price: number | null;
   percent_difference: number | null;
 };
 
@@ -93,12 +93,12 @@ export type MapStat = {
   raw_map_names: string[];
   period_start: string;
   period_end: string;
-  avg_price: number;
+  median_price: number;
   listing_count: number;
   total_quantity: number;
   stddev_price: number;
   estimated_units_sold: number;
-  avg_sale_price: number | null;
+  median_sale_price: number | null;
   current_quantity: number;       // qty from latest scrape (current stock)
   current_listing_count: number;  // listing count from latest scrape
   today_units_sold: number;       // units sold since midnight
@@ -107,9 +107,8 @@ export type MapStat = {
 export type SalesByHour = {
   hour: number;
   estimated_units_sold: number;
-  estimated_revenue: number;
   sale_events: number;
-  avg_sale_price: number | null;
+  median_sale_price: number | null;
 };
 
 export type SalesByHourMap = {
@@ -135,15 +134,15 @@ export type SellerStat = {
   seller_name: string;
   listing_count: number;
   total_quantity: number;
-  avg_price: number;
-  avg_deviation_from_daily_avg: number;
+  median_price: number;
+  median_deviation_from_daily_median: number;
 };
 
 export type Trend = {
   tracked_item_id: number;
   recent_period_days: number;
-  recent_avg_price: number | null;
-  prior_avg_price: number | null;
+  recent_median_price: number | null;
+  prior_median_price: number | null;
   percent_change: number | null;
 };
 

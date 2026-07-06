@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import { api, MapStat, Observation, SalesByHourMap, TrackedItem } from "@/lib/api";
 
-type SortKey = "listing_count" | "avg_price" | "current_quantity" | "today_units_sold";
+type SortKey = "listing_count" | "median_price" | "current_quantity" | "today_units_sold";
 
 const MAP_COLORS = [
   "#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#ea580c",
@@ -242,7 +242,7 @@ export default function MapAnalysisPage() {
             <XAxis dataKey="map_name" fontSize={12} />
             <YAxis fontSize={12} domain={["auto", "auto"]} />
             <Tooltip />
-            <Bar dataKey="avg_price" fill="var(--color-secondary)" name="Avg price" />
+            <Bar dataKey="median_price" fill="var(--color-secondary)" name="Median price" />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -279,7 +279,7 @@ export default function MapAnalysisPage() {
           <thead className="bg-muted text-left sticky top-0">
             <tr>
               <th className="px-3 py-2">Map</th>
-              <SortableHeader label="Avg price (± stddev)" sortKey="avg_price" current={sortKey} dir={sortDir} onClick={toggleSort} />
+              <SortableHeader label="Median price (± stddev)" sortKey="median_price" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <SortableHeader label="Listings" sortKey="listing_count" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <SortableHeader label="Qty (now)" sortKey="current_quantity" current={sortKey} dir={sortDir} onClick={toggleSort} />
               <SortableHeader label="Est. sold (today)" sortKey="today_units_sold" current={sortKey} dir={sortDir} onClick={toggleSort} />
@@ -294,14 +294,14 @@ export default function MapAnalysisPage() {
                 <tr className="border-t border-border hover:bg-muted/50">
                   <td className="px-3 py-2 font-medium">{m.map_name}</td>
                   <td className="px-3 py-2">
-                    {Math.round(m.avg_price)}
+                    {Math.round(m.median_price)}
                     <span className="text-muted-foreground"> ± {Math.round(m.stddev_price)}</span>
                   </td>
                   <td className="px-3 py-2">{m.current_listing_count}</td>
                   <td className="px-3 py-2">{m.current_quantity}</td>
                   <td className="px-3 py-2">{m.today_units_sold}</td>
                   <td className="px-3 py-2">
-                    {m.avg_sale_price != null ? Math.round(m.avg_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
+                    {m.median_sale_price != null ? Math.round(m.median_sale_price).toLocaleString() : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {m.period_start} → {m.period_end}

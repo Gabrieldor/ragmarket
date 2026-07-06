@@ -39,6 +39,19 @@ def _date_filter(stmt, model, start: date | None, end: date | None):
     return stmt
 
 
+def _observation_date_filter(stmt, start: date | None, end: date | None):
+    """Same [start, end] inclusive-day window as _date_filter, but for a raw
+    ListingObservation query (observed_at is a datetime, not a date string) -- matches the
+    day boundaries rollup_jobs.py uses when building HourlyStat/DailyStat/MapStat, so a true
+    median computed here buckets the same rows those rollups already aggregated.
+    """
+    if start is not None:
+        stmt = stmt.where(ListingObservation.observed_at >= datetime.combine(start, time.min))
+    if end is not None:
+        stmt = stmt.where(ListingObservation.observed_at < datetime.combine(end + timedelta(days=1), time.min))
+    return stmt
+
+
 def _sale_events_query(item_id: int, start: date | None, end: date | None):
     """Reads from the persisted SaleEvent table (written by the collector via
     db.repository.infer_and_persist_sales) rather than recomputing live -- see
@@ -108,6 +121,18 @@ def hourly_pattern(
     for row in rows:
         buckets[row.hour].append(row)
 
+    # True median from raw observations, grouped by hour-of-day on the same clock basis
+    # rollup_jobs.compute_hourly_stats uses (obs.observed_at.hour, no timezone shift) so the
+    # buckets line up with the HourlyStat rows' own min/max/total_quantity/listing_count.
+    raw_stmt = select(ListingObservation.observed_at, ListingObservation.price).where(
+        ListingObservation.tracked_item_id == item_id,
+        ListingObservation.is_outlier.is_(False),
+    )
+    raw_stmt = _observation_date_filter(raw_stmt, start, end)
+    raw_prices_by_hour: dict[int, list[int]] = defaultdict(list)
+    for observed_at, price in db.execute(raw_stmt):
+        raw_prices_by_hour[observed_at.hour].append(price)
+
     results = []
     for hour, group in sorted(buckets.items()):
         total_listings = sum(r.listing_count for r in group)
@@ -120,7 +145,7 @@ def hourly_pattern(
             HourOfDayStatOut(
                 hour=hour,
                 avg_price=weighted_avg,
-                median_price=statistics.median(r.median_price for r in group),
+                median_price=statistics.median(raw_prices_by_hour[hour]),
                 min_price=min(r.min_price for r in group),
                 max_price=max(r.max_price for r in group),
                 total_quantity=sum(r.total_quantity for r in group),
@@ -147,6 +172,17 @@ def weekday_pattern(
     for row in rows:
         buckets[row.weekday].append(row)
 
+    # True median from raw observations, grouped by weekday on the same clock basis
+    # rollup_jobs.compute_daily_stats uses (target_date.weekday(), no timezone shift).
+    raw_stmt = select(ListingObservation.observed_at, ListingObservation.price).where(
+        ListingObservation.tracked_item_id == item_id,
+        ListingObservation.is_outlier.is_(False),
+    )
+    raw_stmt = _observation_date_filter(raw_stmt, start, end)
+    raw_prices_by_weekday: dict[int, list[int]] = defaultdict(list)
+    for observed_at, price in db.execute(raw_stmt):
+        raw_prices_by_weekday[observed_at.weekday()].append(price)
+
     results = []
     for weekday, group in sorted(buckets.items()):
         total_listings = sum(r.listing_count for r in group)
@@ -160,7 +196,7 @@ def weekday_pattern(
                 weekday=weekday,
                 is_weekend=weekday >= 5,
                 avg_price=weighted_avg,
-                median_price=statistics.median(r.median_price for r in group),
+                median_price=statistics.median(raw_prices_by_weekday[weekday]),
                 min_price=min(r.min_price for r in group),
                 max_price=max(r.max_price for r in group),
                 total_quantity=sum(r.total_quantity for r in group),
@@ -178,27 +214,26 @@ def weekend_vs_weekday(
     end: date | None = None,
     db: Session = Depends(get_db),
 ):
-    stmt = select(DailyStat).where(DailyStat.tracked_item_id == item_id)
-    stmt = _date_filter(stmt, DailyStat, start, end)
-    rows = list(db.scalars(stmt))
+    # True median split by weekday, on the same clock basis rollup_jobs.compute_daily_stats
+    # uses (target_date.weekday() >= 5, no timezone shift).
+    raw_stmt = select(ListingObservation.observed_at, ListingObservation.price).where(
+        ListingObservation.tracked_item_id == item_id,
+        ListingObservation.is_outlier.is_(False),
+    )
+    raw_stmt = _observation_date_filter(raw_stmt, start, end)
+    weekday_prices: list[int] = []
+    weekend_prices: list[int] = []
+    for observed_at, price in db.execute(raw_stmt):
+        (weekend_prices if observed_at.weekday() >= 5 else weekday_prices).append(price)
 
-    weekday_rows = [r for r in rows if not r.is_weekend]
-    weekend_rows = [r for r in rows if r.is_weekend]
-
-    def _weighted_avg(group: list[DailyStat]) -> float | None:
-        total = sum(r.listing_count for r in group)
-        if not total:
-            return None
-        return sum(r.avg_price * r.listing_count for r in group) / total
-
-    weekday_avg = _weighted_avg(weekday_rows)
-    weekend_avg = _weighted_avg(weekend_rows)
+    weekday_median = statistics.median(weekday_prices) if weekday_prices else None
+    weekend_median = statistics.median(weekend_prices) if weekend_prices else None
     pct = None
-    if weekday_avg and weekend_avg:
-        pct = ((weekend_avg - weekday_avg) / weekday_avg) * 100
+    if weekday_median and weekend_median:
+        pct = ((weekend_median - weekday_median) / weekday_median) * 100
 
     return WeekendComparisonOut(
-        weekday_avg_price=weekday_avg, weekend_avg_price=weekend_avg, percent_difference=pct
+        weekday_median_price=weekday_median, weekend_median_price=weekend_median, percent_difference=pct
     )
 
 
@@ -226,17 +261,29 @@ def map_analysis(
         raw_name = row.map_name or "unknown"
         buckets[alias_lookup.get(raw_name, raw_name)].append(row)
 
-    # Historical: all-time sale events within the date filter
+    # True median price per map, over the raw observations within the date range (replaces
+    # the old weighted-avg-of-MapStat approach).
+    raw_prices_by_map: dict[str, list[int]] = defaultdict(list)
+    raw_stmt = select(ListingObservation.map_name, ListingObservation.price).where(
+        ListingObservation.tracked_item_id == item_id,
+        ListingObservation.is_outlier.is_(False),
+    )
+    raw_stmt = _observation_date_filter(raw_stmt, start, end)
+    for raw_map_name, price in db.execute(raw_stmt):
+        raw_name = raw_map_name or "unknown"
+        raw_prices_by_map[alias_lookup.get(raw_name, raw_name)].append(price)
+
+    # Historical: all-time sale events within the date filter. sale_prices_by_map holds each
+    # event's price repeated quantity_sold times, so the true median below is
+    # quantity-weighted the same way the old sum(price*qty)/sum(qty) weighted average was.
     sold_by_map: dict[str, int] = defaultdict(int)
-    sale_price_num_by_map: dict[str, float] = defaultdict(float)
-    sale_price_den_by_map: dict[str, int] = defaultdict(int)
+    sale_prices_by_map: dict[str, list[int]] = defaultdict(list)
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         raw_name = event.map_name or "unknown"
         canonical = alias_lookup.get(raw_name, raw_name)
         sold_by_map[canonical] += event.quantity_sold
         if event.price is not None:
-            sale_price_num_by_map[canonical] += event.price * event.quantity_sold
-            sale_price_den_by_map[canonical] += event.quantity_sold
+            sale_prices_by_map[canonical].extend([event.price] * event.quantity_sold)
 
     # Current quantity + listing count: from the most recent scrape per map (ignores date filter)
     current_qty_by_map: dict[str, int] = defaultdict(int)
@@ -284,32 +331,23 @@ def map_analysis(
     results = []
     for map_name, group in sorted(buckets.items(), key=lambda kv: -sum(r.listing_count for r in kv[1])):
         total_listings = sum(r.listing_count for r in group)
-        weighted_avg = (
-            sum(r.avg_price * r.listing_count for r in group) / total_listings
-            if total_listings
-            else 0.0
-        )
-        if total_listings:
-            pooled_variance = sum(
-                r.listing_count * (r.stddev_price ** 2 + (r.avg_price - weighted_avg) ** 2)
-                for r in group
-            ) / total_listings
-        else:
-            pooled_variance = 0.0
-        den = sale_price_den_by_map.get(map_name, 0)
-        avg_sale_price = sale_price_num_by_map[map_name] / den if den else None
+        prices = raw_prices_by_map.get(map_name, [])
+        median_price = statistics.median(prices) if prices else 0.0
+        stddev_price = statistics.pstdev(prices) if len(prices) > 1 else 0.0
+        sale_prices = sale_prices_by_map.get(map_name)
+        median_sale_price = statistics.median(sale_prices) if sale_prices else None
         results.append(
             MapStatOut(
                 map_name=map_name,
                 raw_map_names=sorted({r.map_name or "unknown" for r in group}),
                 period_start=min(r.period_start for r in group),
                 period_end=max(r.period_end for r in group),
-                avg_price=weighted_avg,
+                median_price=median_price,
                 listing_count=total_listings,
                 total_quantity=sum(r.total_quantity for r in group),
-                stddev_price=pooled_variance ** 0.5,
+                stddev_price=stddev_price,
                 estimated_units_sold=sold_by_map.get(map_name, 0),
-                avg_sale_price=avg_sale_price,
+                median_sale_price=median_sale_price,
                 current_quantity=current_qty_by_map.get(map_name, 0),
                 current_listing_count=current_listings_by_map.get(map_name, 0),
                 today_units_sold=today_sold_by_map.get(map_name, 0),
@@ -324,19 +362,19 @@ def map_analysis(
         if map_name in buckets:
             continue
         prices = current_prices_by_map.get(map_name, [])
-        den = sale_price_den_by_map.get(map_name, 0)
+        sale_prices = sale_prices_by_map.get(map_name)
         results.append(
             MapStatOut(
                 map_name=map_name,
                 raw_map_names=sorted(current_raw_names_by_canonical.get(map_name, {map_name})),
                 period_start=today_iso,
                 period_end=today_iso,
-                avg_price=sum(prices) / len(prices) if prices else 0.0,
+                median_price=statistics.median(prices) if prices else 0.0,
                 listing_count=0,
                 total_quantity=0,
                 stddev_price=statistics.pstdev(prices) if len(prices) > 1 else 0.0,
                 estimated_units_sold=sold_by_map.get(map_name, 0),
-                avg_sale_price=sale_price_num_by_map[map_name] / den if den else None,
+                median_sale_price=statistics.median(sale_prices) if sale_prices else None,
                 current_quantity=current_qty_by_map.get(map_name, 0),
                 current_listing_count=current_listings_by_map.get(map_name, 0),
                 today_units_sold=today_sold_by_map.get(map_name, 0),
@@ -398,37 +436,33 @@ def sales_by_hour(
 
     Groups sale events by (date, hour) first to get per-day totals, then averages
     those daily totals per hour -- so '1 AM' shows the mean of each day's 1 AM
-    sales rather than an ever-growing cumulative sum.
+    sales rather than an ever-growing cumulative sum. median_sale_price, however, is the
+    true median across every individual sale event's price in that hour bucket (pooled
+    across all days in range), weighted by repeating each event's price quantity_sold times.
     """
-    # Per-day totals: (date, hour) → {sold, price_num, price_den}
+    # Per-day totals: (date, hour) → sold.  Also collect every priced event's price
+    # (repeated quantity_sold times) per hour bucket, for the quantity-weighted true median.
     # Use Brazil local time so the chart shows hours meaningful to the user.
-    daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0, "revenue": 0.0, "price_num": 0.0, "price_den": 0})
+    daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0})
+    hour_prices: dict[int, list[int]] = defaultdict(list)
     for event in db.scalars(_sale_events_query(item_id, start, end)):
         brt = event.sale_attributed_at - timedelta(hours=3)
         key = (brt.date(), brt.hour)
         daily[key]["sold"] += event.quantity_sold
         if event.price is not None:
-            daily[key]["revenue"] += event.price * event.quantity_sold
-            daily[key]["price_num"] += event.price * event.quantity_sold
-            daily[key]["price_den"] += event.quantity_sold
+            hour_prices[brt.hour].extend([event.price] * event.quantity_sold)
 
     # Average across days per hour
-    hourly: dict[int, dict] = defaultdict(
-        lambda: {"sold_values": [], "revenue_values": [], "price_num": 0.0, "price_den": 0}
-    )
+    hourly: dict[int, dict] = defaultdict(lambda: {"sold_values": []})
     for (_, hour), vals in daily.items():
         hourly[hour]["sold_values"].append(vals["sold"])
-        hourly[hour]["revenue_values"].append(vals["revenue"])
-        hourly[hour]["price_num"] += vals["price_num"]
-        hourly[hour]["price_den"] += vals["price_den"]
 
     return [
         SalesByHourOut(
             hour=hour,
             estimated_units_sold=statistics.mean(b["sold_values"]),
-            estimated_revenue=statistics.mean(b["revenue_values"]),
             sale_events=len(b["sold_values"]),
-            avg_sale_price=b["price_num"] / b["price_den"] if b["price_den"] else None,
+            median_sale_price=statistics.median(hour_prices[hour]) if hour_prices.get(hour) else None,
         )
         for hour, b in sorted(hourly.items())
     ]
@@ -495,7 +529,7 @@ def seller_analysis(
 
     daily_stmt = select(DailyStat).where(DailyStat.tracked_item_id == item_id)
     daily_stmt = _date_filter(daily_stmt, DailyStat, start, end)
-    daily_avg_by_date = {row.date: row.avg_price for row in db.scalars(daily_stmt)}
+    daily_median_by_date = {row.date: row.median_price for row in db.scalars(daily_stmt)}
 
     # "Current stock" must match what searching the market right now would show -- only the
     # most recent observation cycle within the requested range, not every distinct listing
@@ -513,9 +547,9 @@ def seller_analysis(
     for seller_name, obs_list in by_seller.items():
         prices = [o.price for o in obs_list]
         deviations = [
-            o.price - day_avg
+            o.price - day_median
             for o in obs_list
-            if (day_avg := daily_avg_by_date.get(o.observed_at.date().isoformat())) is not None
+            if (day_median := daily_median_by_date.get(o.observed_at.date().isoformat())) is not None
         ]
         current_quantity = sum(o.quantity for o in obs_list if o.observed_at == latest_observed_at)
         if current_quantity == 0:
@@ -530,14 +564,14 @@ def seller_analysis(
                 seller_name=seller_name,
                 listing_count=len(obs_list),
                 total_quantity=current_quantity,
-                avg_price=sum(prices) / len(prices),
-                avg_deviation_from_daily_avg=(
-                    sum(deviations) / len(deviations) if deviations else 0.0
+                median_price=statistics.median(prices),
+                median_deviation_from_daily_median=(
+                    statistics.median(deviations) if deviations else 0.0
                 ),
             )
         )
 
-    results.sort(key=lambda r: r.avg_deviation_from_daily_avg)
+    results.sort(key=lambda r: r.median_deviation_from_daily_median)
     return results
 
 
@@ -596,38 +630,35 @@ def trend_analysis(
     days: int = Query(default=30, ge=1, le=365),
     db: Session = Depends(get_db),
 ):
-    """Compare the average price over the most recent N days vs. the N days before that."""
+    """Compare the true median price over the most recent N days vs. the N days before that,
+    computed directly from raw (non-outlier) ListingObservation rows.
+    """
     today = date.today()
     recent_start = today - timedelta(days=days)
     prior_start = recent_start - timedelta(days=days)
 
-    stmt = select(DailyStat).where(
-        DailyStat.tracked_item_id == item_id,
-        DailyStat.date >= prior_start.isoformat(),
-        DailyStat.date <= today.isoformat(),
-    )
-    rows = list(db.scalars(stmt))
+    def _median_price(range_start: date, range_end_exclusive: date) -> float | None:
+        stmt = select(ListingObservation.price).where(
+            ListingObservation.tracked_item_id == item_id,
+            ListingObservation.is_outlier.is_(False),
+            ListingObservation.observed_at >= datetime.combine(range_start, time.min),
+            ListingObservation.observed_at < datetime.combine(range_end_exclusive, time.min),
+        )
+        prices = list(db.scalars(stmt))
+        return statistics.median(prices) if prices else None
 
-    recent_rows = [r for r in rows if r.date >= recent_start.isoformat()]
-    prior_rows = [r for r in rows if r.date < recent_start.isoformat()]
-
-    def _weighted_avg(group: list[DailyStat]) -> float | None:
-        total = sum(r.listing_count for r in group)
-        if not total:
-            return None
-        return sum(r.avg_price * r.listing_count for r in group) / total
-
-    recent_avg = _weighted_avg(recent_rows)
-    prior_avg = _weighted_avg(prior_rows)
+    # [prior_start, recent_start) and [recent_start, today] (inclusive of today).
+    recent_median = _median_price(recent_start, today + timedelta(days=1))
+    prior_median = _median_price(prior_start, recent_start)
     pct = None
-    if recent_avg is not None and prior_avg:
-        pct = ((recent_avg - prior_avg) / prior_avg) * 100
+    if recent_median is not None and prior_median:
+        pct = ((recent_median - prior_median) / prior_median) * 100
 
     return TrendOut(
         tracked_item_id=item_id,
         recent_period_days=days,
-        recent_avg_price=recent_avg,
-        prior_avg_price=prior_avg,
+        recent_median_price=recent_median,
+        prior_median_price=prior_median,
         percent_change=pct,
     )
 

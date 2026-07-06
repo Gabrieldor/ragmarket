@@ -95,12 +95,12 @@ class MapStatOut(BaseModel):
     raw_map_names: list[str]
     period_start: str
     period_end: str
-    avg_price: float
+    median_price: float
     listing_count: int
     total_quantity: int
-    # Pooled stddev of price across the range, combined from each day's stddev_price via the
-    # pooled-variance formula (see api/routers/analytics.py:map_analysis) -- not a simple
-    # average of per-day stddevs, which would understate spread when daily averages differ.
+    # True population stddev of raw per-listing prices across the range for this map (see
+    # api/routers/analytics.py:map_analysis) -- computed directly from the raw observations,
+    # not derived from per-day rollup stddevs.
     stddev_price: float
     # Inferred from (1) quantity decreases on the same listing (matched by ssi) across
     # consecutive scrapes, and (2) listings that disappear entirely, confirmed as sold out
@@ -109,7 +109,7 @@ class MapStatOut(BaseModel):
     # minimum-bound estimate: very recent disappearances within the grace window are left
     # out (pending) rather than guessed at. See analytics.py:_compute_sold_deltas.
     estimated_units_sold: int
-    avg_sale_price: float | None  # quantity-weighted avg price across inferred sale events; null if no sales
+    median_sale_price: float | None  # quantity-weighted median price across inferred sale events; null if no sales
     current_quantity: int         # sum of qty in the most recent scrape for this map (current stock)
     current_listing_count: int    # number of listings in the most recent scrape for this map
     today_units_sold: int         # units sold today (since midnight local time)
@@ -133,9 +133,8 @@ class SalesByHourOut(BaseModel):
 
     hour: int
     estimated_units_sold: float  # average daily units sold at this hour (not cumulative)
-    estimated_revenue: float  # average daily revenue at this hour (not cumulative)
     sale_events: int             # number of days that had sales at this hour
-    avg_sale_price: float | None  # quantity-weighted avg price; null if no priced sale events
+    median_sale_price: float | None  # quantity-weighted median price; null if no priced sale events
 
 
 class SalesByHourMapOut(BaseModel):
@@ -179,8 +178,8 @@ class WeekdayStatOut(BaseModel):
 
 
 class WeekendComparisonOut(BaseModel):
-    weekday_avg_price: float | None
-    weekend_avg_price: float | None
+    weekday_median_price: float | None
+    weekend_median_price: float | None
     percent_difference: float | None  # positive => weekend more expensive
 
 
@@ -188,8 +187,8 @@ class SellerStatOut(BaseModel):
     seller_name: str
     listing_count: int  # number of observation rows (listings seen across polls), not stock
     total_quantity: int  # sum of item quantity (stock) across all this seller's listings
-    avg_price: float
-    avg_deviation_from_daily_avg: float  # negative = consistently undercutting the market
+    median_price: float
+    median_deviation_from_daily_median: float  # negative = consistently undercutting the market
 
 
 class ListingHistoryOut(BaseModel):
@@ -214,8 +213,8 @@ class ListingHistoryOut(BaseModel):
 class TrendOut(BaseModel):
     tracked_item_id: int
     recent_period_days: int
-    recent_avg_price: float | None
-    prior_avg_price: float | None
+    recent_median_price: float | None
+    prior_median_price: float | None
     percent_change: float | None
 
 
