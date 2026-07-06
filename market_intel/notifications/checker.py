@@ -304,7 +304,13 @@ async def check_watch_rules(
         if index > 0:
             await asyncio.sleep(config.rule_delay_seconds)
 
-        excluded_set = set(rule.excluded_maps.split(",")) if rule.excluded_maps else set()
+        rule_excluded_set = set(rule.excluded_maps.split(",")) if rule.excluded_maps else set()
+        global_excluded_set = (
+            {m.strip().lower() for m in config.global_excluded_maps.split(",") if m.strip()}
+            if config.global_excluded_maps
+            else set()
+        )
+        excluded_set = rule_excluded_set | global_excluded_set
         needs_refine_slot = rule.required_refine is not None or rule.required_slot is not None
         needs_map = rule.required_map is not None or bool(excluded_set)
 

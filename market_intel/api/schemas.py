@@ -422,6 +422,7 @@ class NotificationSettingsOut(BaseModel):
     store_type: str
     server_type: str
     max_pages: int
+    global_excluded_maps: str | None
     updated_at: datetime
 
 
@@ -436,6 +437,7 @@ class NotificationSettingsUpdate(BaseModel):
     store_type: str | None = None
     server_type: str | None = None
     max_pages: int | None = None
+    global_excluded_maps: str | None = None
 
 
 class MapCountOut(BaseModel):

@@ -58,6 +58,7 @@ export default function WatcherPage() {
           store_type: s.store_type,
           server_type: s.server_type,
           max_pages: String(s.max_pages),
+          global_excluded_maps: s.global_excluded_maps || "",
           discord_token: "",
         });
       })
@@ -112,6 +113,7 @@ export default function WatcherPage() {
         store_type: form.store_type,
         server_type: form.server_type,
         max_pages: Number(form.max_pages),
+        global_excluded_maps: (form.global_excluded_maps || "").trim(),
       };
       if (form.discord_token) payload.discord_token = form.discord_token;
       const updated = await api.updateNotificationSettings(payload);
@@ -319,6 +321,17 @@ export default function WatcherPage() {
                   className="border border-border rounded px-3 py-1.5 text-sm w-full"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Excluded maps (comma-separated, applies to all rules)
+              </label>
+              <input
+                value={form.global_excluded_maps || ""}
+                onChange={(e) => setForm((f) => ({ ...f, global_excluded_maps: e.target.value }))}
+                className="border border-border rounded px-3 py-1.5 text-sm w-full"
+              />
             </div>
 
             <button

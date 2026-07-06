@@ -404,6 +404,10 @@ class NotificationSettings(Base):
     store_type: Mapped[str] = mapped_column(String, nullable=False, default="BUY")
     server_type: Mapped[str] = mapped_column(String, nullable=False, default="FREYA")
     max_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Comma-separated, lowercase, no spaces (same format as WatchRule.excluded_maps) --
+    # applied to every rule in addition to (unioned with) that rule's own excluded_maps,
+    # so the user can exclude a map globally instead of tagging every rule with !mapname.
+    global_excluded_maps: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
     )

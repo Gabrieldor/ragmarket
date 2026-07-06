@@ -43,6 +43,7 @@ def _settings_out(config: NotificationSettings) -> NotificationSettingsOut:
         store_type=config.store_type,
         server_type=config.server_type,
         max_pages=config.max_pages,
+        global_excluded_maps=config.global_excluded_maps,
         updated_at=config.updated_at,
     )
 

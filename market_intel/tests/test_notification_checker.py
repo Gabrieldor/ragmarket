@@ -266,3 +266,86 @@ def test_check_watch_rules_excluded_maps_filters_db_path(session):
     assert fired == 1
     assert notifier.sent == [("triggered", "Elunium !auction_02 < 1000", 950, None)]
     assert provider.calls == []
+
+
+def test_check_watch_rules_global_excluded_maps_filters_rule_with_no_own_excluded_maps(session):
+    """A rule with no per-rule excluded_maps of its own must still be map-filtered when the
+    global setting excludes the map the cheapest listing sits on.
+    """
+    item = TrackedItem(item_name="Elunium", server_name="FREYA", store_type="BUY")
+    session.add(item)
+    session.flush()
+    run = ScrapeRun(status="success")
+    session.add(run)
+    session.flush()
+
+    session.add_all([
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id, price=900, quantity=5,
+            map_name="auction_02",
+        ),
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id, price=950, quantity=5,
+            map_name="prt_fild08",
+        ),
+    ])
+
+    rule = WatchRule(
+        raw="Elunium < 1000", item_name="Elunium", operator="<", target_price=1000,
+    )
+    session.add(rule)
+    session.commit()
+
+    provider = _FakeProvider({})  # DB path should not hit the live provider at all
+    notifier = _FakeNotifier()
+    config = _config(global_excluded_maps="auction_02")
+    fired = asyncio.run(check_watch_rules(session, provider, notifier, config))
+    session.commit()
+
+    assert fired == 1
+    assert notifier.sent == [("triggered", "Elunium < 1000", 950, None)]
+    assert provider.calls == []
+
+
+def test_check_watch_rules_global_and_rule_excluded_maps_union(session):
+    """The rule's own excluded_maps and the global list must combine (union), not override
+    each other -- both excluded maps' listings are dropped, leaving only the third.
+    """
+    item = TrackedItem(item_name="Elunium", server_name="FREYA", store_type="BUY")
+    session.add(item)
+    session.flush()
+    run = ScrapeRun(status="success")
+    session.add(run)
+    session.flush()
+
+    session.add_all([
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id, price=900, quantity=5,
+            map_name="auction_02",
+        ),
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id, price=920, quantity=5,
+            map_name="prt_fild08",
+        ),
+        ListingObservation(
+            tracked_item_id=item.id, scrape_run_id=run.id, price=950, quantity=5,
+            map_name="geffen",
+        ),
+    ])
+
+    rule = WatchRule(
+        raw="Elunium !auction_02 < 1000", item_name="Elunium", operator="<", target_price=1000,
+        excluded_maps="auction_02",
+    )
+    session.add(rule)
+    session.commit()
+
+    provider = _FakeProvider({})  # DB path should not hit the live provider at all
+    notifier = _FakeNotifier()
+    config = _config(global_excluded_maps="prt_fild08")
+    fired = asyncio.run(check_watch_rules(session, provider, notifier, config))
+    session.commit()
+
+    assert fired == 1
+    assert notifier.sent == [("triggered", "Elunium !auction_02 < 1000", 950, None)]
+    assert provider.calls == []

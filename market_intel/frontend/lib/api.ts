@@ -285,6 +285,7 @@ export type NotificationSettings = {
   store_type: string;
   server_type: string;
   max_pages: number;
+  global_excluded_maps: string | null;
   updated_at: string;
 };
 
@@ -458,6 +459,7 @@ export const api = {
     store_type: string;
     server_type: string;
     max_pages: number;
+    global_excluded_maps: string;
   }>) =>
     apiFetch<NotificationSettings>("/notifications/settings", {
       method: "PATCH",
