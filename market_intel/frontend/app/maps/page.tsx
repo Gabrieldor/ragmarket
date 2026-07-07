@@ -62,18 +62,14 @@ export default function MapAnalysisPage() {
     if (selectedId == null) return;
     setExpandedMap(null);
     api
-      .mapAnalysis(selectedId, {
-        start: startDate || undefined,
-        end: endDate || undefined,
-        exclude_sold_out: hideSoldOut,
-      })
+      .mapAnalysis(selectedId, { start: startDate || undefined, end: endDate || undefined })
       .then(setMapStats)
       .catch((err) => setError(String(err)));
     api
       .salesByHourByMap(selectedId, { start: startDate || undefined, end: endDate || undefined })
       .then(setSalesByHourMap)
       .catch((err) => setError(String(err)));
-  }, [selectedId, startDate, endDate, hideSoldOut]);
+  }, [selectedId, startDate, endDate]);
 
   const allMapNames = Array.from(
     new Set(mapStats.map((m) => m.map_name).filter((n): n is string => Boolean(n)))
