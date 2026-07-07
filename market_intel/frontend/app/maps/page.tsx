@@ -329,7 +329,7 @@ export default function MapAnalysisPage() {
                     {Math.round(m.median_price)}
                     <span className="text-muted-foreground"> ± {Math.round(m.stddev_price)}</span>
                   </td>
-                  <td className="px-3 py-2">{m.listing_count}</td>
+                  <td className="px-3 py-2">{m.current_listing_count}</td>
                   <td className="px-3 py-2">{m.current_quantity}</td>
                   <td className="px-3 py-2">{m.today_units_sold}</td>
                   <td className="px-3 py-2">

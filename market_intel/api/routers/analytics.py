@@ -265,14 +265,7 @@ def map_analysis(
     # True median price per map, over the raw observations within the date range (replaces
     # the old weighted-avg-of-MapStat approach).
     raw_prices_by_map: dict[str, list[int]] = defaultdict(list)
-    raw_ssi_by_map: dict[str, set] = defaultdict(set)
-    raw_qty_by_map: dict[str, int] = defaultdict(int)
-    raw_stmt = select(
-        ListingObservation.map_name,
-        ListingObservation.price,
-        ListingObservation.ssi,
-        ListingObservation.quantity,
-    ).where(
+    raw_stmt = select(ListingObservation.map_name, ListingObservation.price).where(
         ListingObservation.tracked_item_id == item_id,
         ListingObservation.is_outlier.is_(False),
     )
@@ -281,11 +274,9 @@ def map_analysis(
         raw_stmt = exclude_sold_out_filter(
             raw_stmt, ListingObservation.tracked_item_id, ListingObservation.ssi
         )
-    for raw_map_name, price, ssi, quantity in db.execute(raw_stmt):
-        canonical = alias_lookup.get(raw_map_name or "unknown", raw_map_name or "unknown")
-        raw_prices_by_map[canonical].append(price)
-        raw_ssi_by_map[canonical].add(ssi)
-        raw_qty_by_map[canonical] += quantity
+    for raw_map_name, price in db.execute(raw_stmt):
+        raw_name = raw_map_name or "unknown"
+        raw_prices_by_map[alias_lookup.get(raw_name, raw_name)].append(price)
 
     # Historical: all-time sale events within the date filter. sale_prices_by_map holds each
     # event's price repeated quantity_sold times, so the true median below is
@@ -348,10 +339,6 @@ def map_analysis(
     results = []
     for map_name, group in sorted(buckets.items(), key=lambda kv: -sum(r.listing_count for r in kv[1])):
         total_listings = sum(r.listing_count for r in group)
-        total_quantity = sum(r.total_quantity for r in group)
-        if exclude_sold_out:
-            total_listings = len(raw_ssi_by_map.get(map_name, set()))
-            total_quantity = raw_qty_by_map.get(map_name, 0)
         prices = raw_prices_by_map.get(map_name, [])
         median_price = statistics.median(prices) if prices else 0.0
         stddev_price = statistics.pstdev(prices) if len(prices) > 1 else 0.0
@@ -365,7 +352,7 @@ def map_analysis(
                 period_end=max(r.period_end for r in group),
                 median_price=median_price,
                 listing_count=total_listings,
-                total_quantity=total_quantity,
+                total_quantity=sum(r.total_quantity for r in group),
                 stddev_price=stddev_price,
                 estimated_units_sold=sold_by_map.get(map_name, 0),
                 median_sale_price=median_sale_price,
