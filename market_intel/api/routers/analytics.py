@@ -52,7 +52,7 @@ def _observation_date_filter(stmt, start: date | None, end: date | None):
     return stmt
 
 
-def _sale_events_query(item_id: int, start: date | None, end: date | None):
+def _sale_events_query(item_id: int, start: date | None, end: date | None, exclude_sold_out: bool = False):
     """Reads from the persisted SaleEvent table (written by the collector via
     db.repository.infer_and_persist_sales) rather than recomputing live -- see
     sales_inference.py for the detection method and SaleEvent for why this is persisted
@@ -63,6 +63,8 @@ def _sale_events_query(item_id: int, start: date | None, end: date | None):
         stmt = stmt.where(SaleEvent.sale_attributed_at >= start.isoformat())
     if end is not None:
         stmt = stmt.where(SaleEvent.sale_attributed_at < (end + timedelta(days=1)).isoformat())
+    if exclude_sold_out:
+        stmt = stmt.where(SaleEvent.method != "sellout_no_relist")
     return stmt
 
 
@@ -242,6 +244,7 @@ def map_analysis(
     item_id: int,
     start: date | None = None,
     end: date | None = None,
+    exclude_sold_out: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Price-by-map comparison. Historical metrics (avg_price, stddev, est_units_sold)
@@ -278,7 +281,7 @@ def map_analysis(
     # quantity-weighted the same way the old sum(price*qty)/sum(qty) weighted average was.
     sold_by_map: dict[str, int] = defaultdict(int)
     sale_prices_by_map: dict[str, list[int]] = defaultdict(list)
-    for event in db.scalars(_sale_events_query(item_id, start, end)):
+    for event in db.scalars(_sale_events_query(item_id, start, end, exclude_sold_out)):
         raw_name = event.map_name or "unknown"
         canonical = alias_lookup.get(raw_name, raw_name)
         sold_by_map[canonical] += event.quantity_sold
@@ -319,12 +322,13 @@ def map_analysis(
     _today_brazil = datetime.now(_tz_brazil).date()
     today_start = datetime.combine(_today_brazil, datetime.min.time()) + timedelta(hours=3)
     today_sold_by_map: dict[str, int] = defaultdict(int)
-    for event in db.scalars(
-        select(SaleEvent).where(
-            SaleEvent.tracked_item_id == item_id,
-            SaleEvent.sale_attributed_at >= today_start,
-        )
-    ):
+    today_stmt = select(SaleEvent).where(
+        SaleEvent.tracked_item_id == item_id,
+        SaleEvent.sale_attributed_at >= today_start,
+    )
+    if exclude_sold_out:
+        today_stmt = today_stmt.where(SaleEvent.method != "sellout_no_relist")
+    for event in db.scalars(today_stmt):
         raw_name = event.map_name or "unknown"
         today_sold_by_map[alias_lookup.get(raw_name, raw_name)] += event.quantity_sold
 
@@ -430,6 +434,7 @@ def sales_by_hour(
     item_id: int,
     start: date | None = None,
     end: date | None = None,
+    exclude_sold_out: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Average estimated units sold per hour-of-day across all days in the range.
@@ -445,7 +450,7 @@ def sales_by_hour(
     # Use Brazil local time so the chart shows hours meaningful to the user.
     daily: dict[tuple, dict] = defaultdict(lambda: {"sold": 0})
     hour_prices: dict[int, list[int]] = defaultdict(list)
-    for event in db.scalars(_sale_events_query(item_id, start, end)):
+    for event in db.scalars(_sale_events_query(item_id, start, end, exclude_sold_out)):
         brt = event.sale_attributed_at - timedelta(hours=3)
         key = (brt.date(), brt.hour)
         daily[key]["sold"] += event.quantity_sold
@@ -473,6 +478,7 @@ def sales_by_hour_by_map(
     item_id: int,
     start: date | None = None,
     end: date | None = None,
+    exclude_sold_out: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Average estimated units sold per (map, hour-of-day) across all days in the range.
@@ -484,7 +490,7 @@ def sales_by_hour_by_map(
 
     # Per-day totals: (map, hour, date) → qty  — Brazil local time for the hour bucket
     daily: dict[tuple, int] = defaultdict(int)
-    for event in db.scalars(_sale_events_query(item_id, start, end)):
+    for event in db.scalars(_sale_events_query(item_id, start, end, exclude_sold_out)):
         if not event.map_name:
             continue
         canonical = alias_lookup.get(event.map_name, event.map_name)
@@ -771,6 +777,7 @@ def threshold_breakdown(
     sold_op: str | None = Query(default=None),
     sold_price: float | None = Query(default=None),
     sold_price_max: float | None = Query(default=None),
+    exclude_sold_out: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Counts of listings/sales above, below, or between a given price threshold within a
@@ -840,13 +847,14 @@ def threshold_breakdown(
     if sold_price is not None:
         sold_by_map: dict[str, int] = defaultdict(int)
         sold_total = 0
-        for event in db.scalars(
-            select(SaleEvent).where(
-                SaleEvent.tracked_item_id == item_id,
-                SaleEvent.sale_attributed_at >= start,
-                SaleEvent.sale_attributed_at < end,
-            )
-        ):
+        sold_stmt = select(SaleEvent).where(
+            SaleEvent.tracked_item_id == item_id,
+            SaleEvent.sale_attributed_at >= start,
+            SaleEvent.sale_attributed_at < end,
+        )
+        if exclude_sold_out:
+            sold_stmt = sold_stmt.where(SaleEvent.method != "sellout_no_relist")
+        for event in db.scalars(sold_stmt):
             if event.price is None or not _cmp(sold_op, event.price, sold_price, sold_price_max):
                 continue
             raw_name = event.map_name or "unknown"

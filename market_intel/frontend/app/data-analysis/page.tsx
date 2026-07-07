@@ -25,6 +25,7 @@ export default function DataAnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [availPriceError, setAvailPriceError] = useState<string | null>(null);
   const [soldPriceError, setSoldPriceError] = useState<string | null>(null);
+  const [hideSoldOut, setHideSoldOut] = useState(false);
 
   useEffect(() => {
     api.listItems().then((list) => {
@@ -33,8 +34,14 @@ export default function DataAnalysisPage() {
     }).catch((err) => setError(String(err)));
   }, []);
 
-  async function handleRun(e: React.FormEvent) {
-    e.preventDefault();
+  // Re-run the last query whenever "Hide sold out" is toggled, but only once a query has
+  // already been run -- toggling before hitting "Run" shouldn't fire a request on its own.
+  useEffect(() => {
+    if (result) runQuery();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideSoldOut]);
+
+  async function runQuery() {
     if (selectedId == null) return;
     setError(null);
     setAvailPriceError(null);
@@ -88,6 +95,7 @@ export default function DataAnalysisPage() {
         sold_op: parsedSoldPrice != null ? soldOp : undefined,
         sold_price: parsedSoldPrice ?? undefined,
         sold_price_max: soldOp === "between" ? parsedSoldPriceMax ?? undefined : undefined,
+        exclude_sold_out: hideSoldOut,
       });
       setResult(data);
     } catch (err) {
@@ -95,6 +103,11 @@ export default function DataAnalysisPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleRun(e: React.FormEvent) {
+    e.preventDefault();
+    await runQuery();
   }
 
   return (
@@ -147,6 +160,9 @@ export default function DataAnalysisPage() {
               ))}
             </select>
           </div>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground pb-2">
+            <input type="checkbox" checked={hideSoldOut} onChange={(e) => setHideSoldOut(e.target.checked)} /> Hide sold out
+          </label>
         </div>
 
         <div className="flex gap-6 flex-wrap">

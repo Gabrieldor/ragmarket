@@ -36,6 +36,7 @@ export default function MapAnalysisPage() {
   const [endDate, setEndDate] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("listing_count");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [hideSoldOut, setHideSoldOut] = useState(false);
 
   const [expandedMap, setExpandedMap] = useState<string | null>(null);
   const [expandedListings, setExpandedListings] = useState<Observation[]>([]);
@@ -60,14 +61,14 @@ export default function MapAnalysisPage() {
     if (selectedId == null) return;
     setExpandedMap(null);
     api
-      .mapAnalysis(selectedId, { start: startDate || undefined, end: endDate || undefined })
+      .mapAnalysis(selectedId, { start: startDate || undefined, end: endDate || undefined, exclude_sold_out: hideSoldOut })
       .then(setMapStats)
       .catch((err) => setError(String(err)));
     api
-      .salesByHourByMap(selectedId, { start: startDate || undefined, end: endDate || undefined })
+      .salesByHourByMap(selectedId, { start: startDate || undefined, end: endDate || undefined, exclude_sold_out: hideSoldOut })
       .then(setSalesByHourMap)
       .catch((err) => setError(String(err)));
-  }, [selectedId, startDate, endDate]);
+  }, [selectedId, startDate, endDate, hideSoldOut]);
 
   const allMapNames = Array.from(
     new Set(mapStats.map((m) => m.map_name).filter((n): n is string => Boolean(n)))
@@ -200,6 +201,9 @@ export default function MapAnalysisPage() {
             Clear dates (all-time)
           </button>
         )}
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground pb-2">
+          <input type="checkbox" checked={hideSoldOut} onChange={(e) => setHideSoldOut(e.target.checked)} /> Hide sold out
+        </label>
       </div>
 
       {allMapNames.length > 0 && (

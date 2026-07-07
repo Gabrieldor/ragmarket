@@ -345,24 +345,27 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<WeekendComparison>(`/analytics/${itemId}/weekend-vs-weekday${suffix}`);
   },
-  mapAnalysis: (itemId: number, params: { start?: string; end?: string } = {}) => {
+  mapAnalysis: (itemId: number, params: { start?: string; end?: string; exclude_sold_out?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<MapStat[]>(`/analytics/${itemId}/map${suffix}`);
   },
-  salesByHour: (itemId: number, params: { start?: string; end?: string } = {}) => {
+  salesByHour: (itemId: number, params: { start?: string; end?: string; exclude_sold_out?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<SalesByHour[]>(`/analytics/${itemId}/sales-by-hour${suffix}`);
   },
-  salesByHourByMap: (itemId: number, params: { start?: string; end?: string } = {}) => {
+  salesByHourByMap: (itemId: number, params: { start?: string; end?: string; exclude_sold_out?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<SalesByHourMap[]>(`/analytics/${itemId}/sales-by-hour-map${suffix}`);
   },
@@ -401,11 +404,13 @@ export const api = {
       sold_op?: "above" | "below" | "between";
       sold_price?: number;
       sold_price_max?: number;
+      exclude_sold_out?: boolean;
     }
   ) => {
     const qs = new URLSearchParams();
     qs.set("date", params.date);
     if (params.hour !== undefined) qs.set("hour", String(params.hour));
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     if (params.avail_price !== undefined) {
       qs.set("avail_op", params.avail_op ?? "above");
       qs.set("avail_price", String(params.avail_price));

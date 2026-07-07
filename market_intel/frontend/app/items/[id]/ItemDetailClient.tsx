@@ -71,6 +71,7 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
   const [error, setError] = useState<string | null>(null);
   const [start, setStart] = useState<string>("");
   const [end, setEnd] = useState<string>("");
+  const [hideSoldOut, setHideSoldOut] = useState(false);
 
   useEffect(() => {
     const range = { start: start || undefined, end: end || undefined };
@@ -86,11 +87,11 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
     api.weekday(itemId, range).then(setWeekday).catch((err) => setError(String(err)));
     api.weekendVsWeekday(itemId, range).then(setWeekendCmp).catch((err) => setError(String(err)));
     api.sellers(itemId, range).then(setSellers).catch((err) => setError(String(err)));
-    api.mapAnalysis(itemId, range).then(setMapStats).catch((err) => setError(String(err)));
-    api.salesByHour(itemId, range).then(setSalesByHour).catch((err) => setError(String(err)));
+    api.mapAnalysis(itemId, { ...range, exclude_sold_out: hideSoldOut }).then(setMapStats).catch((err) => setError(String(err)));
+    api.salesByHour(itemId, { ...range, exclude_sold_out: hideSoldOut }).then(setSalesByHour).catch((err) => setError(String(err)));
     api.trend(itemId, 30).then(setTrend).catch((err) => setError(String(err)));
     api.listSoldOutEvents(itemId).then(setSoldOutEvents).catch((err) => setError(String(err)));
-  }, [itemId, start, end]);
+  }, [itemId, start, end, hideSoldOut]);
 
   if (error) return <p className="text-destructive">{error}</p>;
 
@@ -162,6 +163,9 @@ export default function ItemDetailClient({ itemId }: { itemId: number }) {
         >
           Clear
         </button>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground pb-2">
+          <input type="checkbox" checked={hideSoldOut} onChange={(e) => setHideSoldOut(e.target.checked)} /> Hide sold out
+        </label>
         <p className="text-muted-foreground text-xs">
           Date filter applies to the charts and tables below; current market snapshot and trend always reflect the latest data / their own fixed window.
         </p>
