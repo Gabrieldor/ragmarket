@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from api.schemas import ObservationOut
 from db.models import ListingObservation
+from db.repository import exclude_sold_out_filter
 from db.session import get_db
 
 router = APIRouter(prefix="/observations", tags=["observations"])
@@ -19,6 +20,7 @@ def get_observations(
     map_name: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    exclude_sold_out: bool = False,
     limit: int = Query(default=100, le=1000),
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -36,6 +38,10 @@ def get_observations(
         stmt = stmt.where(ListingObservation.observed_at >= start)
     if end is not None:
         stmt = stmt.where(ListingObservation.observed_at < end)
+    if exclude_sold_out:
+        stmt = exclude_sold_out_filter(
+            stmt, ListingObservation.tracked_item_id, ListingObservation.ssi
+        )
 
     stmt = stmt.order_by(ListingObservation.observed_at.desc()).offset(offset).limit(limit)
     return list(db.scalars(stmt))

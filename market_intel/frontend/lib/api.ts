@@ -315,7 +315,7 @@ export const api = {
   ) => apiFetch<TrackedItem>(`/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteItem: (id: number) => apiFetch<void>(`/items/${id}`, { method: "DELETE" }),
 
-  listObservations: (params: Record<string, string | number | undefined>) => {
+  listObservations: (params: Record<string, string | number | boolean | undefined>) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== "") qs.set(k, String(v));
@@ -345,10 +345,11 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<WeekendComparison>(`/analytics/${itemId}/weekend-vs-weekday${suffix}`);
   },
-  mapAnalysis: (itemId: number, params: { start?: string; end?: string } = {}) => {
+  mapAnalysis: (itemId: number, params: { start?: string; end?: string; exclude_sold_out?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<MapStat[]>(`/analytics/${itemId}/map${suffix}`);
   },
@@ -366,10 +367,11 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<SalesByHourMap[]>(`/analytics/${itemId}/sales-by-hour-map${suffix}`);
   },
-  sellers: (itemId: number, params: { start?: string; end?: string } = {}) => {
+  sellers: (itemId: number, params: { start?: string; end?: string; exclude_sold_out?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<SellerStat[]>(`/analytics/${itemId}/sellers${suffix}`);
   },
@@ -401,11 +403,13 @@ export const api = {
       sold_op?: "above" | "below" | "between";
       sold_price?: number;
       sold_price_max?: number;
+      exclude_sold_out?: boolean;
     }
   ) => {
     const qs = new URLSearchParams();
     qs.set("date", params.date);
     if (params.hour !== undefined) qs.set("hour", String(params.hour));
+    if (params.exclude_sold_out) qs.set("exclude_sold_out", "true");
     if (params.avail_price !== undefined) {
       qs.set("avail_op", params.avail_op ?? "above");
       qs.set("avail_price", String(params.avail_price));

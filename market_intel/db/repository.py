@@ -281,6 +281,23 @@ def infer_and_persist_sales(session: Session, tracked_item_id: int) -> int:
 
 # ── Low-stock ("sold out") detection -- see sold_out_inference.py ─────────────
 
+def exclude_sold_out_filter(stmt, tracked_item_col, ssi_col):
+    """Applies a NOT EXISTS subquery against SoldOutEvent so any row whose
+    (tracked_item_id, ssi) matches a persisted confirmed-sold-out event is excluded.
+    Callers pass the ORM columns for tracked_item_id/ssi on whichever model/select they're
+    querying (currently only ListingObservation), so this isn't tied to one table. SQLAlchemy
+    auto-correlates the subquery against the outer statement's FROM clause.
+    """
+    not_sold_out = ~(
+        select(SoldOutEvent.id)
+        .where(
+            SoldOutEvent.tracked_item_id == tracked_item_col,
+            SoldOutEvent.ssi == ssi_col,
+        )
+        .exists()
+    )
+    return stmt.where(not_sold_out)
+
 def get_scraper_config(session: Session) -> ScraperConfig:
     config = session.get(ScraperConfig, 1)
     if config is None:
