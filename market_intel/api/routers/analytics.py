@@ -25,7 +25,7 @@ from api.schemas import (
     WeekendComparisonOut,
 )
 from db.models import DailyStat, HourlyStat, ListingObservation, MapStat, SaleEvent, TrackedItem
-from db.repository import exclude_sold_out_filter, get_map_alias_lookup
+from db.repository import get_map_alias_lookup
 from db.session import get_db
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -242,7 +242,6 @@ def map_analysis(
     item_id: int,
     start: date | None = None,
     end: date | None = None,
-    exclude_sold_out: bool = False,
     db: Session = Depends(get_db),
 ):
     """Price-by-map comparison. Historical metrics (avg_price, stddev, est_units_sold)
@@ -270,10 +269,6 @@ def map_analysis(
         ListingObservation.is_outlier.is_(False),
     )
     raw_stmt = _observation_date_filter(raw_stmt, start, end)
-    if exclude_sold_out:
-        raw_stmt = exclude_sold_out_filter(
-            raw_stmt, ListingObservation.tracked_item_id, ListingObservation.ssi
-        )
     for raw_map_name, price in db.execute(raw_stmt):
         raw_name = raw_map_name or "unknown"
         raw_prices_by_map[alias_lookup.get(raw_name, raw_name)].append(price)
@@ -305,16 +300,13 @@ def map_analysis(
         .limit(1)
     )
     if latest_at is not None:
-        current_stmt = select(ListingObservation).where(
-            ListingObservation.tracked_item_id == item_id,
-            ListingObservation.observed_at == latest_at,
-            ListingObservation.is_outlier.is_(False),
-        )
-        if exclude_sold_out:
-            current_stmt = exclude_sold_out_filter(
-                current_stmt, ListingObservation.tracked_item_id, ListingObservation.ssi
+        for obs in db.scalars(
+            select(ListingObservation).where(
+                ListingObservation.tracked_item_id == item_id,
+                ListingObservation.observed_at == latest_at,
+                ListingObservation.is_outlier.is_(False),
             )
-        for obs in db.scalars(current_stmt):
+        ):
             raw_name = obs.map_name or "unknown"
             canonical = alias_lookup.get(raw_name, raw_name)
             current_qty_by_map[canonical] += obs.quantity
@@ -516,7 +508,6 @@ def seller_analysis(
     item_id: int,
     start: date | None = None,
     end: date | None = None,
-    exclude_sold_out: bool = False,
     db: Session = Depends(get_db),
 ):
     """Per-seller average price and deviation from that day's market average.
@@ -532,10 +523,6 @@ def seller_analysis(
         obs_stmt = obs_stmt.where(ListingObservation.observed_at >= start.isoformat())
     if end is not None:
         obs_stmt = obs_stmt.where(ListingObservation.observed_at < (end + timedelta(days=1)).isoformat())
-    if exclude_sold_out:
-        obs_stmt = exclude_sold_out_filter(
-            obs_stmt, ListingObservation.tracked_item_id, ListingObservation.ssi
-        )
     observations = list(db.scalars(obs_stmt))
     if not observations:
         return []
@@ -784,7 +771,6 @@ def threshold_breakdown(
     sold_op: str | None = Query(default=None),
     sold_price: float | None = Query(default=None),
     sold_price_max: float | None = Query(default=None),
-    exclude_sold_out: bool = False,
     db: Session = Depends(get_db),
 ):
     """Counts of listings/sales above, below, or between a given price threshold within a
@@ -834,16 +820,13 @@ def threshold_breakdown(
     if avail_price is not None:
         available_by_map: dict[str, int] = defaultdict(int)
         available_total = 0
-        available_stmt = select(ListingObservation).where(
-            ListingObservation.tracked_item_id == item_id,
-            ListingObservation.observed_at >= start,
-            ListingObservation.observed_at < end,
-        )
-        if exclude_sold_out:
-            available_stmt = exclude_sold_out_filter(
-                available_stmt, ListingObservation.tracked_item_id, ListingObservation.ssi
+        for obs in db.scalars(
+            select(ListingObservation).where(
+                ListingObservation.tracked_item_id == item_id,
+                ListingObservation.observed_at >= start,
+                ListingObservation.observed_at < end,
             )
-        for obs in db.scalars(available_stmt):
+        ):
             if not _cmp(avail_op, obs.price, avail_price, avail_price_max):
                 continue
             raw_name = obs.map_name or "unknown"

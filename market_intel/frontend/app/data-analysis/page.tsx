@@ -19,7 +19,6 @@ export default function DataAnalysisPage() {
   const [soldOp, setSoldOp] = useState<"above" | "below" | "between">("above");
   const [soldPrice, setSoldPrice] = useState("");
   const [soldPriceMax, setSoldPriceMax] = useState("");
-  const [hideSoldOut, setHideSoldOut] = useState(false);
 
   const [result, setResult] = useState<ThresholdBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
@@ -36,19 +35,6 @@ export default function DataAnalysisPage() {
 
   async function handleRun(e: React.FormEvent) {
     e.preventDefault();
-    await runQuery();
-  }
-
-  // Re-run the last query automatically when the sold-out filter is toggled, so the
-  // checkbox behaves like the other result-affecting controls instead of requiring
-  // the user to hit "Run" again.
-  useEffect(() => {
-    if (result == null) return;
-    runQuery();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hideSoldOut]);
-
-  async function runQuery() {
     if (selectedId == null) return;
     setError(null);
     setAvailPriceError(null);
@@ -102,7 +88,6 @@ export default function DataAnalysisPage() {
         sold_op: parsedSoldPrice != null ? soldOp : undefined,
         sold_price: parsedSoldPrice ?? undefined,
         sold_price_max: soldOp === "between" ? parsedSoldPriceMax ?? undefined : undefined,
-        exclude_sold_out: hideSoldOut,
       });
       setResult(data);
     } catch (err) {
@@ -308,23 +293,13 @@ export default function DataAnalysisPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <button
-            type="submit"
-            disabled={selectedId == null || loading}
-            className="bg-primary text-white text-sm px-4 py-1.5 rounded disabled:opacity-50"
-          >
-            {loading ? "Running..." : "Run"}
-          </button>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={hideSoldOut}
-              onChange={(e) => setHideSoldOut(e.target.checked)}
-            />
-            Hide sold out
-          </label>
-        </div>
+        <button
+          type="submit"
+          disabled={selectedId == null || loading}
+          className="bg-primary text-white text-sm px-4 py-1.5 rounded disabled:opacity-50"
+        >
+          {loading ? "Running..." : "Run"}
+        </button>
       </form>
 
       {error && <p className="text-destructive text-sm">{error}</p>}

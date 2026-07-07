@@ -38,12 +38,10 @@ export default function MapAnalysisPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const [expandedMap, setExpandedMap] = useState<string | null>(null);
-  const [expandedRawNames, setExpandedRawNames] = useState<string[]>([]);
   const [expandedListings, setExpandedListings] = useState<Observation[]>([]);
   const [expandedLoading, setExpandedLoading] = useState(false);
 
   const [excludedMaps, setExcludedMaps] = useState<Set<string>>(new Set());
-  const [hideSoldOut, setHideSoldOut] = useState(false);
 
   useEffect(() => {
     api.listItems().then((list) => {
@@ -112,18 +110,24 @@ export default function MapAnalysisPage() {
     return sortDir === "asc" ? diff : -diff;
   });
 
-  async function fetchExpandedListings(rawNames: string[]) {
+  async function toggleMap(mapStat: MapStat) {
+    const mapName = mapStat.map_name;
+    if (!mapName) return;
+    if (expandedMap === mapName) {
+      setExpandedMap(null);
+      return;
+    }
     if (selectedId == null) return;
+    setExpandedMap(mapName);
     setExpandedLoading(true);
     try {
+      // Raw observations are stored under the original (pre-alias) map_name, never the
+      // canonical display name shown in this table -- a map-alias group like "Abyss" can
+      // span multiple raw names (abyss_03.gat, abyss_04.gat), so query each and merge.
+      const rawNames = mapStat.raw_map_names.length > 0 ? mapStat.raw_map_names : [mapName];
       const batches = await Promise.all(
         rawNames.map((rawName) =>
-          api.listObservations({
-            tracked_item_id: selectedId,
-            map_name: rawName,
-            limit: 200,
-            exclude_sold_out: hideSoldOut,
-          })
+          api.listObservations({ tracked_item_id: selectedId, map_name: rawName, limit: 200 })
         )
       );
       const recent = batches.flat();
@@ -141,30 +145,6 @@ export default function MapAnalysisPage() {
       setExpandedLoading(false);
     }
   }
-
-  async function toggleMap(mapStat: MapStat) {
-    const mapName = mapStat.map_name;
-    if (!mapName) return;
-    if (expandedMap === mapName) {
-      setExpandedMap(null);
-      return;
-    }
-    if (selectedId == null) return;
-    setExpandedMap(mapName);
-    // Raw observations are stored under the original (pre-alias) map_name, never the
-    // canonical display name shown in this table -- a map-alias group like "Abyss" can
-    // span multiple raw names (abyss_03.gat, abyss_04.gat), so query each and merge.
-    const rawNames = mapStat.raw_map_names.length > 0 ? mapStat.raw_map_names : [mapName];
-    setExpandedRawNames(rawNames);
-    await fetchExpandedListings(rawNames);
-  }
-
-  // Re-fetch the currently expanded map's listings when the sold-out filter changes.
-  useEffect(() => {
-    if (expandedMap == null || expandedRawNames.length === 0) return;
-    fetchExpandedListings(expandedRawNames);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hideSoldOut]);
 
   return (
     <div className="space-y-6">
@@ -220,14 +200,6 @@ export default function MapAnalysisPage() {
             Clear dates (all-time)
           </button>
         )}
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground pb-2">
-          <input
-            type="checkbox"
-            checked={hideSoldOut}
-            onChange={(e) => setHideSoldOut(e.target.checked)}
-          />
-          Hide sold out
-        </label>
       </div>
 
       {allMapNames.length > 0 && (
