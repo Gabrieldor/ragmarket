@@ -27,8 +27,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import httpx
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import select  # noqa: E402
@@ -51,6 +49,9 @@ from db.repository import (  # noqa: E402
     infer_and_persist_sold_out,
     insert_observations,
     list_tracked_items,
+    list_watched_item_names,
+    log_collector_action,
+    prune_collector_action_log,
     set_collector_status,
     start_scrape_run,
     upsert_shop_location,
@@ -69,12 +70,6 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_BACKOFF_MULTIPLIER = 3
 MAX_RATE_LIMIT_BACKOFF_SECONDS = 4 * 3600
 _RETRY_POLL_INTERVAL = 3.0
-
-# IP auto-rotation: a cycle is "bad" if every item attempted that cycle hit the
-# location circuit breaker (see DetailedListingProvider.last_item_hit_circuit_breaker).
-# After this many consecutive bad cycles, POST /admin/rotate-ip once and reset.
-CONSECUTIVE_BAD_CYCLES_THRESHOLD = 1
-_ROTATE_IP_URL = "http://localhost:8000/admin/rotate-ip"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +119,13 @@ async def _scrape_one_item(
     with get_session() as session:
 
         def needs_location(listing: DetailedListing) -> bool:
+            if not item.location_lookup_enabled:
+                log_collector_action(
+                    session, action="click_skip_disabled", tracked_item_id=item.id,
+                    item_name=item.item_name, ssi=listing.ssi,
+                    seller_name=listing.seller_name, shop_name=listing.shop_name,
+                )
+                return False
             key = (listing.seller_name or "", listing.shop_name or "")
             if key in cycle_cache or key in lookup_requested:
                 return False
@@ -135,6 +137,11 @@ async def _scrape_one_item(
             )
             if cached:
                 cycle_cache[key] = cached
+                log_collector_action(
+                    session, action="click_skip_cached", tracked_item_id=item.id,
+                    item_name=item.item_name, ssi=listing.ssi,
+                    seller_name=listing.seller_name, shop_name=listing.shop_name,
+                )
                 return False
             lookup_requested.add(key)
             return True
@@ -146,11 +153,13 @@ async def _scrape_one_item(
             needs_location,
             max_pages=1,
             location_click_delay_seconds=location_click_delay_seconds,
+            session=session,
+            tracked_item_id=item.id,
         )
         location_attempts = provider.last_item_location_attempts
 
         observations: list[ListingObservation] = []
-        for rank, (listing, location) in enumerate(results, start=1):
+        for rank, (listing, location, location_source_override) in enumerate(results, start=1):
             key = (listing.seller_name or "", listing.shop_name or "")
             shop_loc: ShopLocation | None
 
@@ -170,7 +179,7 @@ async def _scrape_one_item(
                 source = "fresh_lookup"
             else:
                 shop_loc = cycle_cache.get(key)
-                source = "cache" if shop_loc else None
+                source = location_source_override or ("cache" if shop_loc else None)
 
             observations.append(
                 ListingObservation(
@@ -326,8 +335,6 @@ async def main() -> None:
     await notifier.start()
     notifier_signature = _notifier_signature(notif_config)
 
-    consecutive_bad_cycles = 0
-
     try:
         while not stop_event.is_set():
 
@@ -380,6 +387,10 @@ async def main() -> None:
             with get_session() as session:
                 items = list_tracked_items(session, active_only=True)
                 cfg = get_collector_config(session)
+                watched_names = list_watched_item_names(session)
+
+            # Watched items scrape first, each group keeping its registration order.
+            items.sort(key=lambda it: it.item_name not in watched_names)
 
             if not items:
                 logger.info("No active tracked items — sleeping 30 s.")
@@ -399,8 +410,6 @@ async def main() -> None:
             rate_limited_this_cycle = False
             bad_items_this_cycle = 0
             items_attempted_this_cycle = 0
-            total_location_attempts_this_cycle = 0
-            total_location_successes_this_cycle = 0
 
             for i, item in enumerate(items):
                 if stop_event.is_set():
@@ -417,13 +426,11 @@ async def main() -> None:
 
                 scrape_start = time.monotonic()
                 try:
-                    obs_count, lookups, attempts = await _scrape_one_item(
+                    obs_count, lookups, _attempts = await _scrape_one_item(
                         provider, item, run_id,
                         location_click_delay_seconds=cfg.location_click_delay_seconds,
                     )
                     items_attempted_this_cycle += 1
-                    total_location_attempts_this_cycle += attempts
-                    total_location_successes_this_cycle += lookups
                     if provider.last_item_hit_circuit_breaker:
                         bad_items_this_cycle += 1
 
@@ -471,7 +478,7 @@ async def main() -> None:
                     rate_limited_this_cycle = True
                     break  # stop this cycle, start fresh after backoff
 
-                except Exception:
+                except Exception as exc:
                     elapsed = time.monotonic() - scrape_start
                     logger.exception(
                         "[%s] scrape failed after %.1f s — skipping to next item.",
@@ -484,6 +491,10 @@ async def main() -> None:
                             items_attempted=1, items_succeeded=0,
                             location_lookups_performed=0,
                             status="interrupted",
+                        )
+                        log_collector_action(
+                            session, action="error", tracked_item_id=item.id,
+                            item_name=item.item_name, message=str(exc),
                         )
                     continue
 
@@ -551,40 +562,15 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Unhandled error in watch-rules check.")
 
-            # ── IP auto-rotation bookkeeping ──────────────────────────────
-            if not rate_limited_this_cycle:
-                if total_location_attempts_this_cycle > 0 and total_location_successes_this_cycle == 0:
-                    consecutive_bad_cycles += 1
-                    logger.warning(
-                        "Bad cycle: all %d location lookup attempt(s) failed this cycle "
-                        "(0 successes) (consecutive bad cycles: %d/%d).",
-                        total_location_attempts_this_cycle, consecutive_bad_cycles,
-                        CONSECUTIVE_BAD_CYCLES_THRESHOLD,
-                    )
-                    if consecutive_bad_cycles >= CONSECUTIVE_BAD_CYCLES_THRESHOLD:
-                        logger.warning(
-                            "%d consecutive bad cycles — triggering automatic IP rotation.",
-                            consecutive_bad_cycles,
-                        )
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.post(_ROTATE_IP_URL, timeout=10)
-                            logger.warning(
-                                "Auto IP-rotation request sent: HTTP %d — %s",
-                                resp.status_code, resp.text,
-                            )
-                        except Exception:
-                            logger.exception("Auto IP-rotation request failed.")
-                        consecutive_bad_cycles = 0
-                        logger.info("Consecutive bad-cycle streak reset after triggering rotation.")
-                elif consecutive_bad_cycles > 0:
-                    logger.info(
-                        "Cycle OK (%d/%d location lookup(s) succeeded) — resetting bad-cycle "
-                        "streak (was %d).",
-                        total_location_successes_this_cycle, total_location_attempts_this_cycle,
-                        consecutive_bad_cycles,
-                    )
-                    consecutive_bad_cycles = 0
+                # Prune old collector-action-log rows once per cycle (not per item) --
+                # keeps the debug log table bounded without a per-listing DB round-trip.
+                try:
+                    with get_session() as session:
+                        pruned = prune_collector_action_log(session, days=7)
+                    if pruned:
+                        logger.debug("Pruned %d collector_action_log row(s) older than 7 days.", pruned)
+                except Exception:
+                    logger.exception("Unhandled error pruning collector_action_log.")
 
             # ── Cycle sleep ───────────────────────────────────────────────
             if not rate_limited_this_cycle:

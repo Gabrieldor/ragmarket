@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from db.models import (
+    CollectorActionLog,
     CollectorConfig,
     CollectorStatus,
     DailyStat,
@@ -33,10 +34,16 @@ from sold_out_inference import InferredSoldOutTrigger, compute_sold_out_triggers
 # ── Tracked items ────────────────────────────────────────────────────────────
 
 def list_tracked_items(session: Session, *, active_only: bool = False) -> list[TrackedItem]:
-    stmt = select(TrackedItem)
+    stmt = select(TrackedItem).order_by(TrackedItem.id)
     if active_only:
         stmt = stmt.where(TrackedItem.is_active.is_(True))
     return list(session.scalars(stmt))
+
+
+def list_watched_item_names(session: Session) -> set[str]:
+    """item_name values with at least one active watch rule."""
+    stmt = select(WatchRule.item_name).where(WatchRule.is_active.is_(True)).distinct()
+    return set(session.scalars(stmt))
 
 
 def add_tracked_item(
@@ -167,11 +174,95 @@ def upsert_shop_location(
     return location
 
 
+def get_shops_missing_location(session: Session, server_name: str) -> list[tuple[str, str]]:
+    """Distinct (seller_name, shop_name) pairs observed in the most recent scrape_run for
+    this server, restricted to the last 24h, that have no matching row in shop_locations.
+    """
+    latest_run_id = session.scalars(
+        select(func.max(ListingObservation.scrape_run_id)).where(
+            ListingObservation.server_name == server_name
+        )
+    ).first()
+    if latest_run_id is None:
+        return []
+
+    cutoff = datetime.now() - timedelta(hours=24)
+    stmt = (
+        select(ListingObservation.seller_name, ListingObservation.shop_name)
+        .outerjoin(
+            ShopLocation,
+            (ShopLocation.seller_name == ListingObservation.seller_name)
+            & (ShopLocation.shop_name == ListingObservation.shop_name)
+            & (ShopLocation.server_name == ListingObservation.server_name),
+        )
+        .where(
+            ListingObservation.server_name == server_name,
+            ListingObservation.scrape_run_id == latest_run_id,
+            ListingObservation.observed_at >= cutoff,
+            ListingObservation.seller_name.is_not(None),
+            ListingObservation.shop_name.is_not(None),
+            ShopLocation.id.is_(None),
+        )
+        .distinct()
+    )
+    return [(seller_name, shop_name) for seller_name, shop_name in session.execute(stmt)]
+
+
 # ── Observations ──────────────────────────────────────────────────────────────
 
 def insert_observations(session: Session, observations: list[ListingObservation]) -> None:
     session.add_all(observations)
     session.flush()
+
+
+# ── Collector action log (append-only, granular debug visibility) ─────────────
+
+def log_collector_action(
+    session: Session,
+    *,
+    action: str,
+    tracked_item_id: int | None = None,
+    item_name: str | None = None,
+    ssi: str | None = None,
+    seller_name: str | None = None,
+    shop_name: str | None = None,
+    message: str | None = None,
+) -> None:
+    session.add(
+        CollectorActionLog(
+            action=action,
+            tracked_item_id=tracked_item_id,
+            item_name=item_name,
+            ssi=ssi,
+            seller_name=seller_name,
+            shop_name=shop_name,
+            message=message,
+        )
+    )
+
+
+def prune_collector_action_log(session: Session, days: int = 7) -> int:
+    cutoff = datetime.now() - timedelta(days=days)
+    result = session.execute(
+        delete(CollectorActionLog).where(CollectorActionLog.logged_at < cutoff)
+    )
+    return result.rowcount
+
+
+def get_collector_action_log(
+    session: Session,
+    *,
+    tracked_item_id: int | None = None,
+    limit: int = 200,
+    before_id: int | None = None,
+) -> list[CollectorActionLog]:
+    stmt = select(CollectorActionLog).order_by(CollectorActionLog.id.desc())
+    if tracked_item_id is not None:
+        stmt = stmt.where(CollectorActionLog.tracked_item_id == tracked_item_id)
+    if before_id is not None:
+        stmt = stmt.where(CollectorActionLog.id < before_id)
+    stmt = stmt.limit(limit)
+    return list(session.scalars(stmt))
 
 
 # ── Collector status (single row, real-time state for the dashboard) ──────────
@@ -209,6 +300,7 @@ def set_collector_status(
     next_item_at: datetime | None = None,
     consecutive_rate_limits: int | None = None,
     location_lookup_warning: bool | None = None,
+    modal_429ed: bool | None = None,
 ) -> CollectorStatus:
     status = session.get(CollectorStatus, 1)
     if status is None:
@@ -223,6 +315,8 @@ def set_collector_status(
         status.consecutive_rate_limits = consecutive_rate_limits
     if location_lookup_warning is not None:
         status.location_lookup_warning = location_lookup_warning
+    if modal_429ed is not None:
+        status.modal_429ed = modal_429ed
     status.updated_at = datetime.now()
     session.flush()
     return status
