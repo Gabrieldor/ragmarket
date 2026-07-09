@@ -208,6 +208,7 @@ def set_collector_status(
     next_cycle_at: datetime | None = None,
     next_item_at: datetime | None = None,
     consecutive_rate_limits: int | None = None,
+    location_lookup_warning: bool | None = None,
 ) -> CollectorStatus:
     status = session.get(CollectorStatus, 1)
     if status is None:
@@ -220,6 +221,8 @@ def set_collector_status(
     status.next_item_at = next_item_at
     if consecutive_rate_limits is not None:
         status.consecutive_rate_limits = consecutive_rate_limits
+    if location_lookup_warning is not None:
+        status.location_lookup_warning = location_lookup_warning
     status.updated_at = datetime.now()
     session.flush()
     return status

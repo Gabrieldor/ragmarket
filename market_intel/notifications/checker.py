@@ -290,13 +290,24 @@ async def check_watch_rules(
     provider,
     notifier,
     config: NotificationSettings,
+    *,
+    only_item_aliases: set[str] | None = None,
+    exclude_item_aliases: set[str] | None = None,
 ) -> int:
     """Checks every active WatchRule sequentially (sleeping ``rule_delay_seconds`` between
     each, like the original tool's ``rule_delay``), firing notifications on state
     transitions only -- never re-notifies while a condition holds steady at the same price.
     Returns the count of notifications fired this call.
+
+    ``only_item_aliases`` / ``exclude_item_aliases`` optionally restrict which rules are
+    checked, matched case-insensitively against ``WatchRule.item_name``. At most one of
+    these is expected to be passed by any given caller.
     """
     rules = list(session.scalars(select(WatchRule).where(WatchRule.is_active.is_(True))))
+    if only_item_aliases is not None:
+        rules = [r for r in rules if r.item_name.strip().lower() in only_item_aliases]
+    elif exclude_item_aliases is not None:
+        rules = [r for r in rules if r.item_name.strip().lower() not in exclude_item_aliases]
     fired = 0
     alias_lookup_ci = {raw.lower(): canonical for raw, canonical in get_map_alias_lookup(session).items()}
 

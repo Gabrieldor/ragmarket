@@ -27,6 +27,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import select  # noqa: E402
@@ -68,6 +70,12 @@ RATE_LIMIT_BACKOFF_MULTIPLIER = 3
 MAX_RATE_LIMIT_BACKOFF_SECONDS = 4 * 3600
 _RETRY_POLL_INTERVAL = 3.0
 
+# IP auto-rotation: a cycle is "bad" if every item attempted that cycle hit the
+# location circuit breaker (see DetailedListingProvider.last_item_hit_circuit_breaker).
+# After this many consecutive bad cycles, POST /admin/rotate-ip once and reset.
+CONSECUTIVE_BAD_CYCLES_THRESHOLD = 1
+_ROTATE_IP_URL = "http://localhost:8000/admin/rotate-ip"
+
 
 # ---------------------------------------------------------------------------
 # Sleep helper
@@ -103,10 +111,10 @@ async def _scrape_one_item(
     item,
     run_id: int,
     location_click_delay_seconds: float,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Scrape one item, resolve locations, flag outliers, and commit.
 
-    Returns (observation_count, fresh_location_lookup_count).
+    Returns (observation_count, fresh_location_lookup_count, location_lookup_attempts).
     """
     cycle_cache: dict[tuple[str, str], ShopLocation] = {}
     lookup_requested: set[tuple[str, str]] = set()
@@ -139,6 +147,7 @@ async def _scrape_one_item(
             max_pages=1,
             location_click_delay_seconds=location_click_delay_seconds,
         )
+        location_attempts = provider.last_item_location_attempts
 
         observations: list[ListingObservation] = []
         for rank, (listing, location) in enumerate(results, start=1):
@@ -197,7 +206,7 @@ async def _scrape_one_item(
         if item.sold_out_enabled:
             infer_and_persist_sold_out(session, item.id)
 
-    return len(observations), location_lookups
+    return len(observations), location_lookups, location_attempts
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +326,7 @@ async def main() -> None:
     await notifier.start()
     notifier_signature = _notifier_signature(notif_config)
 
-    last_rollup_date = None
+    consecutive_bad_cycles = 0
 
     try:
         while not stop_event.is_set():
@@ -380,8 +389,18 @@ async def main() -> None:
                 continue
 
             # ── Scrape all items sequentially ─────────────────────────────
+            tracked_item_aliases: set[str] = set()
+            for _it in items:
+                tracked_item_aliases.add(_it.item_name.strip().lower())
+                if _it.display_name:
+                    tracked_item_aliases.add(_it.display_name.strip().lower())
+
             cycle_start = time.monotonic()
             rate_limited_this_cycle = False
+            bad_items_this_cycle = 0
+            items_attempted_this_cycle = 0
+            total_location_attempts_this_cycle = 0
+            total_location_successes_this_cycle = 0
 
             for i, item in enumerate(items):
                 if stop_event.is_set():
@@ -398,10 +417,21 @@ async def main() -> None:
 
                 scrape_start = time.monotonic()
                 try:
-                    obs_count, lookups = await _scrape_one_item(
+                    obs_count, lookups, attempts = await _scrape_one_item(
                         provider, item, run_id,
                         location_click_delay_seconds=cfg.location_click_delay_seconds,
                     )
+                    items_attempted_this_cycle += 1
+                    total_location_attempts_this_cycle += attempts
+                    total_location_successes_this_cycle += lookups
+                    if provider.last_item_hit_circuit_breaker:
+                        bad_items_this_cycle += 1
+
+                    with get_session() as session:
+                        set_collector_status(
+                            session, state="scraping", current_item_name=item.item_name,
+                            location_lookup_warning=provider.last_item_hit_circuit_breaker,
+                        )
 
                 except RateLimitError:
                     elapsed = time.monotonic() - scrape_start
@@ -475,18 +505,31 @@ async def main() -> None:
                     item.item_name, elapsed, obs_count, lookups,
                 )
 
-                # Nightly rollup on first success of the day.
-                from datetime import date
+                # Rollup after every item finishes scraping, so analytics tables
+                # stay fresh within a cycle instead of waiting for the next day.
                 today = datetime.now().date()
-                if last_rollup_date != today:
+                with get_session() as session:
+                    try:
+                        run_rollup_for_date(session, today)
+                        session.commit()
+                        logger.info("Rollup complete for %s.", today)
+                    except Exception:
+                        logger.exception("Rollup failed.")
+
+                # Per-item watch-rule check, so tracked items with an active WatchRule
+                # get evaluated immediately after they finish scraping instead of
+                # waiting for the end-of-cycle check.
+                item_aliases = {item.item_name.strip().lower()}
+                if item.display_name:
+                    item_aliases.add(item.display_name.strip().lower())
+                try:
                     with get_session() as session:
-                        try:
-                            run_rollup_for_date(session, today)
-                            session.commit()
-                            last_rollup_date = today
-                            logger.info("Rollup complete for %s.", today)
-                        except Exception:
-                            logger.exception("Rollup failed.")
+                        _notif_cfg = get_notification_settings(session)
+                        await check_watch_rules(session, provider, notifier, _notif_cfg, only_item_aliases=item_aliases)
+                except RateLimitError:
+                    logger.warning("Rate limited during per-item watch-rule check for '%s' — skipping.", item.item_name)
+                except Exception:
+                    logger.exception("Unhandled error in per-item watch-rule check for '%s'.", item.item_name)
 
                 # Inter-item delay (skip after the last item).
                 is_last = (i == len(items) - 1)
@@ -502,11 +545,46 @@ async def main() -> None:
                 try:
                     with get_session() as session:
                         _notif_cfg = get_notification_settings(session)
-                        await check_watch_rules(session, provider, notifier, _notif_cfg)
+                        await check_watch_rules(session, provider, notifier, _notif_cfg, exclude_item_aliases=tracked_item_aliases)
                 except RateLimitError:
                     logger.warning("Rate limited during watch-rules check — skipping.")
                 except Exception:
                     logger.exception("Unhandled error in watch-rules check.")
+
+            # ── IP auto-rotation bookkeeping ──────────────────────────────
+            if not rate_limited_this_cycle:
+                if total_location_attempts_this_cycle > 0 and total_location_successes_this_cycle == 0:
+                    consecutive_bad_cycles += 1
+                    logger.warning(
+                        "Bad cycle: all %d location lookup attempt(s) failed this cycle "
+                        "(0 successes) (consecutive bad cycles: %d/%d).",
+                        total_location_attempts_this_cycle, consecutive_bad_cycles,
+                        CONSECUTIVE_BAD_CYCLES_THRESHOLD,
+                    )
+                    if consecutive_bad_cycles >= CONSECUTIVE_BAD_CYCLES_THRESHOLD:
+                        logger.warning(
+                            "%d consecutive bad cycles — triggering automatic IP rotation.",
+                            consecutive_bad_cycles,
+                        )
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.post(_ROTATE_IP_URL, timeout=10)
+                            logger.warning(
+                                "Auto IP-rotation request sent: HTTP %d — %s",
+                                resp.status_code, resp.text,
+                            )
+                        except Exception:
+                            logger.exception("Auto IP-rotation request failed.")
+                        consecutive_bad_cycles = 0
+                        logger.info("Consecutive bad-cycle streak reset after triggering rotation.")
+                elif consecutive_bad_cycles > 0:
+                    logger.info(
+                        "Cycle OK (%d/%d location lookup(s) succeeded) — resetting bad-cycle "
+                        "streak (was %d).",
+                        total_location_successes_this_cycle, total_location_attempts_this_cycle,
+                        consecutive_bad_cycles,
+                    )
+                    consecutive_bad_cycles = 0
 
             # ── Cycle sleep ───────────────────────────────────────────────
             if not rate_limited_this_cycle:

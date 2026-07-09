@@ -226,6 +226,7 @@ class CollectorStatusOut(BaseModel):
     next_cycle_at: datetime | None
     next_item_at: datetime | None
     consecutive_rate_limits: int
+    location_lookup_warning: bool
     paused: bool
     updated_at: datetime | None
 
@@ -447,6 +448,7 @@ class MapCountOut(BaseModel):
 
 class ThresholdSideOut(BaseModel):
     total: int
+    grand_total: int
     by_map: list[MapCountOut]
 
 

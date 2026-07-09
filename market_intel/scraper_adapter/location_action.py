@@ -14,6 +14,9 @@ fallback to maintain.
 """
 
 import logging
+import re
+from datetime import datetime
+from pathlib import Path
 
 from playwright.async_api import Page, Error as PlaywrightError
 
@@ -25,6 +28,84 @@ logger = logging.getLogger(__name__)
 # playwright_provider.py -- edit only this block if the site's modal markup changes.
 MODAL_INFO_ITEM = '[class*="style_shop_info__"]'
 MODAL_WRAP = '[class*="style_shop_info_content_wrap"]'
+
+# Forensic capture for modal failures, so a stuck/changed page can be inspected after
+# the fact instead of only ever seeing a one-line "timed out" warning. Capped to avoid
+# unbounded disk growth on a long-running collector.
+_DEBUG_DIR = Path(__file__).resolve().parents[1] / "debug_captures" / "modal_failures"
+_DEBUG_MAX_FILES = 200  # per extension (png/html) -- oldest pruned first
+
+_DOM_PROBE_JS = """
+() => ({
+    modalWrapCount: document.querySelectorAll('[class*="style_shop_info_content_wrap"]').length,
+    modalInfoCount: document.querySelectorAll('[class*="style_shop_info__"]').length,
+    dialogCount: document.querySelectorAll('[role="dialog"]').length,
+    overlayCount: document.querySelectorAll('[class*="overlay" i]').length,
+})
+"""
+
+
+def _slug(text: str | None, max_len: int = 40) -> str:
+    if not text:
+        return "unknown"
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", text.strip())
+    return slug[:max_len] or "unknown"
+
+
+def _prune_old_captures() -> None:
+    for ext in ("*.png", "*.html"):
+        files = sorted(_DEBUG_DIR.glob(ext), key=lambda p: p.stat().st_mtime)
+        excess = len(files) - _DEBUG_MAX_FILES
+        for f in files[:max(excess, 0)]:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+
+async def _capture_failure_diagnostics(
+    page: Page, reason: str, item_name: str | None, seller_name: str | None, shop_name: str | None,
+) -> None:
+    """Best-effort forensic capture on a modal failure -- screenshot, full HTML, and a
+    quick DOM probe (element counts for the selectors we rely on), so a future failure
+    can be diagnosed from artifacts instead of needing to reproduce it live. Every step
+    is independently swallowed: a broken capture must never fail the actual scrape.
+    """
+    probe = {}
+    try:
+        probe = await page.evaluate(_DOM_PROBE_JS)
+    except Exception:
+        pass
+
+    url = None
+    try:
+        url = page.url
+    except Exception:
+        pass
+
+    logger.warning(
+        "Modal failure diagnostics [%s]: item=%s seller=%s shop=%s url=%s dom_probe=%s",
+        reason, item_name, seller_name, shop_name, url, probe,
+    )
+
+    try:
+        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        base_name = f"{stamp}_{_slug(item_name)}_{_slug(seller_name)}"
+        png_path = _DEBUG_DIR / f"{base_name}.png"
+        html_path = _DEBUG_DIR / f"{base_name}.html"
+        try:
+            await page.screenshot(path=str(png_path))
+        except Exception:
+            logger.debug("Failed to save failure screenshot.", exc_info=True)
+        try:
+            html = await page.content()
+            html_path.write_text(html, encoding="utf-8")
+        except Exception:
+            logger.debug("Failed to save failure HTML dump.", exc_info=True)
+        _prune_old_captures()
+    except Exception:
+        logger.debug("Failure-diagnostics capture setup failed.", exc_info=True)
 
 _EXTRACT_MODAL_JS = """
 () => {
@@ -122,7 +203,10 @@ async def _force_close_any_overlay(page: Page) -> None:
         pass
 
 
-async def fetch_shop_location(page: Page, card_locator, timeout_ms: int = 8_000) -> ShopLocationDetail | None:
+async def fetch_shop_location(
+    page: Page, card_locator, timeout_ms: int = 8_000,
+    *, item_name: str | None = None, seller_name: str | None = None, shop_name: str | None = None,
+) -> ShopLocationDetail | None:
     """Click a single result card and read its location modal.
 
     ``card_locator`` is a Playwright Locator pointing at exactly one ``li[data-id]``
@@ -159,6 +243,7 @@ async def fetch_shop_location(page: Page, card_locator, timeout_ms: int = 8_000)
                 "Card click triggered page navigation instead of opening modal "
                 "(site frontend change?) -- skipping location lookup"
             )
+            await _capture_failure_diagnostics(page, "navigation", item_name, seller_name, shop_name)
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             except Exception:
@@ -169,6 +254,7 @@ async def fetch_shop_location(page: Page, card_locator, timeout_ms: int = 8_000)
         raw = await page.evaluate(_EXTRACT_MODAL_JS)
     except Exception as exc:
         logger.warning("Failed to open/read location modal: %s", exc)
+        await _capture_failure_diagnostics(page, "exception", item_name, seller_name, shop_name)
         await _force_close_any_overlay(page)
         return None
     finally:

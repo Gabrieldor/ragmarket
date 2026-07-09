@@ -158,6 +158,7 @@ export type CurrentSnapshot = {
 
 export type CollectorStatus = {
   state: "starting" | "scraping" | "sleeping" | "rate_limited" | "offline" | "paused";
+  location_lookup_warning: boolean;
   current_item_name: string | null;
   next_cycle_at: string | null;
   next_item_at: string | null;
@@ -213,8 +214,8 @@ export type SaleMethodBreakdown = {
 };
 
 export type ThresholdBreakdown = {
-  available: { total: number; by_map: { map_name: string; quantity: number }[] } | null;
-  sold: { total: number; by_map: { map_name: string; quantity: number }[] } | null;
+  available: { total: number; grand_total: number; by_map: { map_name: string; quantity: number }[] } | null;
+  sold: { total: number; grand_total: number; by_map: { map_name: string; quantity: number }[] } | null;
 };
 
 export type MapAlias = {

@@ -68,6 +68,7 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
             setStatus({
               state: "offline", current_item_name: null, next_cycle_at: null,
               next_item_at: null, consecutive_rate_limits: 0, updated_at: null, paused: false,
+              location_lookup_warning: false,
             });
           }
         });
@@ -207,6 +208,12 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
           <div className="font-medium capitalize">{status.state.replace("_", " ")}</div>
           {countdown && <div className="text-sm font-semibold tabular-nums">{countdown}</div>}
           <div className="text-[11px] opacity-80">{isRateLimited ? (retrying ? "Requesting retry…" : retrySent ? "Retry sent — resuming shortly" : "Click to retry now") : message}</div>
+          {status.location_lookup_warning && (
+            <span className="text-amber-600 inline-flex items-center gap-1 mt-0.5">
+              <WarningIcon size={14} aria-hidden />
+              location lookups failing
+            </span>
+          )}
         </div>
       </div>
     );
@@ -227,6 +234,12 @@ export default function CollectorStatusBanner({ compact = false }: { compact?: b
       <span>—</span>
       <span>{isRateLimited ? (retrying ? "Requesting retry…" : retrySent ? "Retry sent — resuming shortly" : "Click to retry now") : message}</span>
       {countdown && !retrying && <span className="font-semibold tabular-nums">({countdown})</span>}
+      {status.location_lookup_warning && (
+        <span className="text-amber-600 inline-flex items-center gap-1 ml-1">
+          <WarningIcon size={14} aria-hidden />
+          location lookups failing
+        </span>
+      )}
     </div>
   );
 }

@@ -115,6 +115,12 @@ def _base_search_term(name: str) -> str:
 class DetailedListingProvider(PlaywrightProvider):
     """Same lifecycle/navigation as PlaywrightProvider; richer per-card extraction."""
 
+    # Set True during scrape_item() if this item's location circuit breaker tripped
+    # (consecutive_location_failures >= LOCATION_FAILURE_CIRCUIT_BREAKER). Reset at the
+    # start of every scrape_item() call. Read by the collector runner after each item to
+    # accumulate a per-cycle "bad item" count for IP-rotation heuristics.
+    last_item_hit_circuit_breaker: bool = False
+
     async def _scrape_page(
         self,
         page: Page,
@@ -250,6 +256,8 @@ class DetailedListingProvider(PlaywrightProvider):
         live DOM element. Listings where ``needs_location`` is False are left with a
         ``None`` location; the caller is expected to fill that in from its cache.
         """
+        self.last_item_hit_circuit_breaker = False
+        self.last_item_location_attempts = 0
         context = await self._browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -282,7 +290,11 @@ class DetailedListingProvider(PlaywrightProvider):
                         and listing.dom_index >= 0
                         and needs_location(listing)
                     ):
-                        location = await fetch_shop_location(page, card_locator.nth(listing.dom_index))
+                        self.last_item_location_attempts += 1
+                        location = await fetch_shop_location(
+                            page, card_locator.nth(listing.dom_index),
+                            item_name=item_name, seller_name=listing.seller_name, shop_name=listing.shop_name,
+                        )
                         if location is None:
                             consecutive_location_failures += 1
                             if consecutive_location_failures >= LOCATION_FAILURE_CIRCUIT_BREAKER:
@@ -293,6 +305,7 @@ class DetailedListingProvider(PlaywrightProvider):
                                     consecutive_location_failures, item_name,
                                 )
                                 location_lookups_disabled = True
+                                self.last_item_hit_circuit_breaker = True
                         else:
                             consecutive_location_failures = 0
                         # Throttle between modal clicks -- avoids hammering the site with

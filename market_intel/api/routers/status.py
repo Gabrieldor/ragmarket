@@ -31,6 +31,7 @@ def collector_status(db: Session = Depends(get_db)):
         return CollectorStatusOut(
             state="offline", current_item_name=None, next_cycle_at=None,
             next_item_at=None, consecutive_rate_limits=0, paused=False, updated_at=None,
+            location_lookup_warning=False,
         )
 
     now = datetime.now()
@@ -54,6 +55,7 @@ def collector_status(db: Session = Depends(get_db)):
         consecutive_rate_limits=status.consecutive_rate_limits,
         paused=status.paused,
         updated_at=status.updated_at,
+        location_lookup_warning=status.location_lookup_warning,
     )
 
 

@@ -213,6 +213,7 @@ class CollectorStatus(Base):
     next_cycle_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_item_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     consecutive_rate_limits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    location_lookup_warning: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     retry_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(
