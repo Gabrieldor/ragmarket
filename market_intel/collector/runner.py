@@ -1,10 +1,15 @@
 """Collector entry point — sequential, one item at a time.
 
 Architecture:
-  Each cycle fetches all active tracked items from the DB and scrapes them
-  sequentially with item_delay_seconds between each one.  After all items are
-  done the collector sleeps poll_interval_seconds before starting the next
-  cycle.  This keeps the logic simple and predictable.
+  Each pass, the collector selects only the tracked items that are *due*
+  (now - last_scraped_at >= their applicable interval; items never scraped
+  are always due) and scrapes them sequentially with item_delay_seconds
+  between each one.  Watched items (an active WatchRule) use
+  price_watch_interval_seconds; everything else uses
+  registration_interval_seconds.  An item that is both watched and
+  registered follows the watcher's cadence but goes through the identical
+  scrape/rollup/outlier/sold-out pipeline.  After each pass the collector
+  sleeps a short fixed tick (TICK_SECONDS) before re-checking due items.
 
 Rate-limit avoidance:
   - item_delay_seconds between consecutive scrapes.
@@ -51,6 +56,7 @@ from db.repository import (  # noqa: E402
     list_tracked_items,
     list_watched_item_names,
     log_collector_action,
+    mark_item_scraped,
     prune_collector_action_log,
     set_collector_status,
     start_scrape_run,
@@ -70,6 +76,23 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_BACKOFF_MULTIPLIER = 3
 MAX_RATE_LIMIT_BACKOFF_SECONDS = 4 * 3600
 _RETRY_POLL_INTERVAL = 3.0
+
+# How often the collector re-checks which items are due, when nothing (or not
+# everything) was due on the previous pass.
+TICK_SECONDS = 30.0
+
+
+def _is_item_due(item, watched_names: set[str], cfg, now: datetime) -> bool:
+    """An item is due when it's never been scraped, or enough time has passed
+    since its last scrape relative to its applicable interval."""
+    if item.last_scraped_at is None:
+        return True
+    interval = (
+        cfg.price_watch_interval_seconds
+        if item.item_name in watched_names
+        else cfg.registration_interval_seconds
+    )
+    return (now - item.last_scraped_at).total_seconds() >= interval
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +321,7 @@ async def main() -> None:
         with get_session() as session:
             _cfg = get_collector_config(session)
         resume_wait = min(
-            _cfg.poll_interval_seconds * (RATE_LIMIT_BACKOFF_MULTIPLIER ** consecutive_rate_limits),
+            _cfg.registration_interval_seconds * (RATE_LIMIT_BACKOFF_MULTIPLIER ** consecutive_rate_limits),
             MAX_RATE_LIMIT_BACKOFF_SECONDS,
         )
         logger.warning(
@@ -385,18 +408,31 @@ async def main() -> None:
 
             # ── Fetch items and config ────────────────────────────────────
             with get_session() as session:
-                items = list_tracked_items(session, active_only=True)
+                all_items = list_tracked_items(session, active_only=True)
                 cfg = get_collector_config(session)
                 watched_names = list_watched_item_names(session)
+
+            if not all_items:
+                logger.info("No active tracked items — sleeping %.0f s.", TICK_SECONDS)
+                with get_session() as session:
+                    set_collector_status(session, state="sleeping")
+                await asyncio.sleep(TICK_SECONDS)
+                continue
+
+            now = datetime.now()
+            items = [it for it in all_items if _is_item_due(it, watched_names, cfg, now)]
 
             # Watched items scrape first, each group keeping its registration order.
             items.sort(key=lambda it: it.item_name not in watched_names)
 
             if not items:
-                logger.info("No active tracked items — sleeping 30 s.")
+                logger.debug("No due items — sleeping %.0f s before re-checking.", TICK_SECONDS)
                 with get_session() as session:
-                    set_collector_status(session, state="sleeping")
-                await asyncio.sleep(30)
+                    set_collector_status(
+                        session, state="sleeping",
+                        next_cycle_at=datetime.now() + timedelta(seconds=TICK_SECONDS),
+                    )
+                await _interruptible_sleep(TICK_SECONDS, stop_event)
                 continue
 
             # ── Scrape all items sequentially ─────────────────────────────
@@ -457,7 +493,7 @@ async def main() -> None:
 
                     consecutive_rate_limits += 1
                     backoff = min(
-                        cfg.poll_interval_seconds
+                        cfg.registration_interval_seconds
                         * (RATE_LIMIT_BACKOFF_MULTIPLIER ** consecutive_rate_limits),
                         MAX_RATE_LIMIT_BACKOFF_SECONDS,
                     )
@@ -496,6 +532,7 @@ async def main() -> None:
                             session, action="error", tracked_item_id=item.id,
                             item_name=item.item_name, message=str(exc),
                         )
+                        mark_item_scraped(session, item.id)
                     continue
 
                 # ── Success ───────────────────────────────────────────────
@@ -510,6 +547,7 @@ async def main() -> None:
                         location_lookups_performed=lookups,
                         status="success",
                     )
+                    mark_item_scraped(session, item.id)
 
                 logger.info(
                     "[%s] %.1f s — %d listing(s), %d fresh location(s).",
@@ -572,21 +610,22 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Unhandled error pruning collector_action_log.")
 
-            # ── Cycle sleep ───────────────────────────────────────────────
+            # ── Tick sleep ────────────────────────────────────────────────
+            # Due items don't imply a fixed-length "cycle" anymore — just wait a
+            # short fixed tick before re-checking which items are due next.
             if not rate_limited_this_cycle:
                 cycle_elapsed = time.monotonic() - cycle_start
-                sleep_for = max(0.0, cfg.poll_interval_seconds - cycle_elapsed)
                 logger.info(
-                    "Cycle complete in %.1f s. Sleeping %.1f s before next cycle.",
-                    cycle_elapsed, sleep_for,
+                    "Pass complete in %.1f s. Sleeping %.0f s before re-checking due items.",
+                    cycle_elapsed, TICK_SECONDS,
                 )
                 with get_session() as session:
                     set_collector_status(
                         session,
                         state="sleeping",
-                        next_cycle_at=datetime.now() + timedelta(seconds=sleep_for),
+                        next_cycle_at=datetime.now() + timedelta(seconds=TICK_SECONDS),
                     )
-                await _interruptible_sleep(sleep_for, stop_event)
+                await _interruptible_sleep(TICK_SECONDS, stop_event)
 
     except KeyboardInterrupt:
         logger.info("Collector stopped (KeyboardInterrupt).")

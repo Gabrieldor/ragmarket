@@ -88,7 +88,7 @@ def compute_sale_events(observations: list) -> list[InferredSaleEvent]:
         return events
 
     latest_cycle_at = max(o.observed_at for o in observations)
-    grace_window = timedelta(seconds=SELLOUT_GRACE_WINDOW_POLLS * settings.poll_interval_seconds)
+    grace_window = timedelta(seconds=SELLOUT_GRACE_WINDOW_POLLS * settings.registration_interval_seconds)
     now = datetime.now()
 
     by_seller_chrono: dict[str, list] = defaultdict(list)

@@ -35,6 +35,7 @@ export type TrackedItem = {
   is_active: boolean;
   poll_interval_override: number | null;
   sold_out_enabled: boolean;
+  location_lookup_enabled: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -159,6 +160,7 @@ export type CurrentSnapshot = {
 export type CollectorStatus = {
   state: "starting" | "scraping" | "sleeping" | "rate_limited" | "offline" | "paused";
   location_lookup_warning: boolean;
+  modal_429ed: boolean;
   current_item_name: string | null;
   next_cycle_at: string | null;
   next_item_at: string | null;
@@ -173,7 +175,8 @@ export type ScraperConfig = {
 };
 
 export type CollectorConfig = {
-  poll_interval_seconds: number;
+  registration_interval_seconds: number;
+  price_watch_interval_seconds: number;
   item_delay_seconds: number;
   location_click_delay_seconds: number;
   updated_at: string;
@@ -266,6 +269,18 @@ export type WatchRule = {
   updated_at: string;
 };
 
+export type CollectorLog = {
+  id: number;
+  logged_at: string;
+  tracked_item_id: number | null;
+  item_name: string | null;
+  action: string;
+  ssi: string | null;
+  seller_name: string | null;
+  shop_name: string | null;
+  message: string | null;
+};
+
 export type NotificationEvent = {
   id: number;
   watch_rule_id: number;
@@ -312,7 +327,12 @@ export const api = {
     apiFetch<TrackedItem>("/items", { method: "POST", body: JSON.stringify(payload) }),
   updateItem: (
     id: number,
-    payload: { is_active?: boolean; poll_interval_override?: number; sold_out_enabled?: boolean }
+    payload: {
+      is_active?: boolean;
+      poll_interval_override?: number;
+      sold_out_enabled?: boolean;
+      location_lookup_enabled?: boolean;
+    }
   ) => apiFetch<TrackedItem>(`/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteItem: (id: number) => apiFetch<void>(`/items/${id}`, { method: "DELETE" }),
 
@@ -434,7 +454,7 @@ export const api = {
     apiFetch<ScraperConfig>("/scraper-config", { method: "PATCH", body: JSON.stringify(body) }),
 
   getCollectorConfig: () => apiFetch<CollectorConfig>("/collector/config"),
-  updateCollectorConfig: (body: Partial<{ poll_interval_seconds: number; item_delay_seconds: number; location_click_delay_seconds: number }>) =>
+  updateCollectorConfig: (body: Partial<{ registration_interval_seconds: number; price_watch_interval_seconds: number; item_delay_seconds: number; location_click_delay_seconds: number }>) =>
     apiFetch<CollectorConfig>("/collector/config", { method: "PATCH", body: JSON.stringify(body) }),
 
   collectorStatus: () => apiFetch<CollectorStatus>("/collector/status"),
@@ -502,6 +522,15 @@ export const api = {
     }),
   rotateIp: () =>
     apiFetch<{ message: string }>("/admin/rotate-ip", { method: "POST" }),
+
+  getCollectorLogs: (params: { tracked_item_id?: number; limit?: number; before_id?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.tracked_item_id != null) qs.set("tracked_item_id", String(params.tracked_item_id));
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    if (params.before_id != null) qs.set("before_id", String(params.before_id));
+    const q = qs.toString();
+    return apiFetch<CollectorLog[]>(`/collector/logs${q ? `?${q}` : ""}`);
+  },
 
   listNotificationEvents: (params: Record<string, string | number | undefined> = {}) => {
     const qs = new URLSearchParams();

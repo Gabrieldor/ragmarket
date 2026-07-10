@@ -46,6 +46,13 @@ def list_watched_item_names(session: Session) -> set[str]:
     return set(session.scalars(stmt))
 
 
+def mark_item_scraped(session: Session, tracked_item_id: int, *, when: datetime | None = None) -> None:
+    """Stamp a tracked item's last_scraped_at so the next due-check is accurate."""
+    item = session.get(TrackedItem, tracked_item_id)
+    if item is not None:
+        item.last_scraped_at = when or datetime.now()
+
+
 def add_tracked_item(
     session: Session,
     *,
@@ -398,13 +405,16 @@ def get_collector_config(session: Session) -> CollectorConfig:
 
 def update_collector_config(
     session: Session,
-    poll_interval_seconds: int | None = None,
+    registration_interval_seconds: int | None = None,
+    price_watch_interval_seconds: int | None = None,
     item_delay_seconds: float | None = None,
     location_click_delay_seconds: float | None = None,
 ) -> CollectorConfig:
     config = get_collector_config(session)
-    if poll_interval_seconds is not None:
-        config.poll_interval_seconds = poll_interval_seconds
+    if registration_interval_seconds is not None:
+        config.registration_interval_seconds = registration_interval_seconds
+    if price_watch_interval_seconds is not None:
+        config.price_watch_interval_seconds = price_watch_interval_seconds
     if item_delay_seconds is not None:
         config.item_delay_seconds = item_delay_seconds
     if location_click_delay_seconds is not None:
@@ -512,7 +522,7 @@ def infer_and_persist_sold_out(session: Session, tracked_item_id: int) -> int:
         # that window (e.g. the PC stayed on all night) -- 2x the configured poll interval
         # gives headroom for ordinary jitter (item throttling, a transient rate-limit retry)
         # without mistaking it for an overnight gap.
-        max_normal_gap_seconds=settings.poll_interval_seconds * 2,
+        max_normal_gap_seconds=settings.registration_interval_seconds * 2,
     )
     return record_sold_out_events(session, tracked_item_id, triggers)
 

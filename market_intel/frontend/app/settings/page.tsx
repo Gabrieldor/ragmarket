@@ -20,7 +20,8 @@ export default function SettingsPage() {
   const [outlierError, setOutlierError] = useState<string | null>(null);
 
   const [collectorConfig, setCollectorConfig] = useState<CollectorConfig | null>(null);
-  const [pollInterval, setPollInterval] = useState("600");
+  const [registrationInterval, setRegistrationInterval] = useState("600");
+  const [priceWatchInterval, setPriceWatchInterval] = useState("600");
   const [itemDelay, setItemDelay] = useState("15");
   const [modalDelay, setModalDelay] = useState("2.5");
   const [timingsSaving, setTimingsSaving] = useState(false);
@@ -61,7 +62,8 @@ export default function SettingsPage() {
     api.getCollectorConfig()
       .then((c) => {
         setCollectorConfig(c);
-        setPollInterval(String(c.poll_interval_seconds));
+        setRegistrationInterval(String(c.registration_interval_seconds));
+        setPriceWatchInterval(String(c.price_watch_interval_seconds));
         setItemDelay(String(c.item_delay_seconds));
         setModalDelay(String(c.location_click_delay_seconds));
       })
@@ -76,7 +78,8 @@ export default function SettingsPage() {
     setTimingsSaved(false);
     try {
       const updated = await api.updateCollectorConfig({
-        poll_interval_seconds: Number(pollInterval),
+        registration_interval_seconds: Number(registrationInterval),
+        price_watch_interval_seconds: Number(priceWatchInterval),
         item_delay_seconds: Number(itemDelay),
         location_click_delay_seconds: Number(modalDelay),
       });
@@ -283,18 +286,32 @@ export default function SettingsPage() {
           but increase the chance of 429 rate-limits.
         </p>
         <form onSubmit={handleTimingsSave} className="space-y-4 border border-border rounded p-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">Cycle interval (s)</label>
+              <label className="block text-xs text-muted-foreground mb-1">Registration scrape interval (seconds)</label>
               <input
                 type="number"
                 min={60}
                 step={30}
-                value={pollInterval}
-                onChange={(e) => setPollInterval(e.target.value)}
+                value={registrationInterval}
+                onChange={(e) => setRegistrationInterval(e.target.value)}
                 className="border border-border rounded px-3 py-1.5 text-sm w-full"
               />
               <p className="text-xs text-muted-foreground mt-1">Wait between full scrape cycles</p>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Price watcher scrape interval (seconds)</label>
+              <input
+                type="number"
+                min={60}
+                step={30}
+                value={priceWatchInterval}
+                onChange={(e) => setPriceWatchInterval(e.target.value)}
+                className="border border-border rounded px-3 py-1.5 text-sm w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Wait between price-watch cycles. Items that are both registered and price-watched use this (faster) interval.
+              </p>
             </div>
             <div>
               <label className="block text-xs text-muted-foreground mb-1">Item delay (s)</label>

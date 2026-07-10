@@ -17,6 +17,7 @@ class TrackedItemOut(BaseModel):
     is_active: bool
     poll_interval_override: int | None
     sold_out_enabled: bool
+    location_lookup_enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -33,6 +34,7 @@ class TrackedItemUpdate(BaseModel):
     is_active: bool | None = None
     poll_interval_override: int | None = None
     sold_out_enabled: bool | None = None
+    location_lookup_enabled: bool | None = None
 
 
 class ObservationOut(BaseModel):
@@ -227,8 +229,23 @@ class CollectorStatusOut(BaseModel):
     next_item_at: datetime | None
     consecutive_rate_limits: int
     location_lookup_warning: bool
+    modal_429ed: bool
     paused: bool
     updated_at: datetime | None
+
+
+class CollectorActionLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    logged_at: datetime
+    tracked_item_id: int | None
+    item_name: str | None
+    action: str
+    ssi: str | None
+    seller_name: str | None
+    shop_name: str | None
+    message: str | None
 
 
 class CurrentSnapshotOut(BaseModel):
@@ -336,14 +353,16 @@ class ScraperConfigUpdate(BaseModel):
 class CollectorConfigOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    poll_interval_seconds: int
+    registration_interval_seconds: int
+    price_watch_interval_seconds: int
     item_delay_seconds: float
     location_click_delay_seconds: float
     updated_at: datetime
 
 
 class CollectorConfigUpdate(BaseModel):
-    poll_interval_seconds: int | None = None
+    registration_interval_seconds: int | None = None
+    price_watch_interval_seconds: int | None = None
     item_delay_seconds: float | None = None
     location_click_delay_seconds: float | None = None
 

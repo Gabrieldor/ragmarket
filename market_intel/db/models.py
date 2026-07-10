@@ -42,6 +42,10 @@ class TrackedItem(Base):
     # Per-item opt-out for low-stock ("sold out") detection -- some items churn too fast or
     # too slow for the global threshold/quiet-hours config to make sense for them.
     sold_out_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Per-item opt-out for shop-location lookups (modal/API), for items where only price/quantity matters.
+    location_lookup_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Last time the collector successfully recorded an observation for this item.
+    last_scraped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
@@ -126,6 +130,37 @@ class ListingObservation(Base):
 
     tracked_item: Mapped["TrackedItem"] = relationship(back_populates="observations")
     scrape_run: Mapped["ScrapeRun"] = relationship(back_populates="observations")
+
+
+class CollectorActionLog(Base):
+    """Append-only fact table -- granular collector action/debug events (modal click
+    attempts/retries/success, skip reasons, scrape errors). Separate from
+    listings_observations (price/quantity data) and debug_captures (screenshot/HTML
+    forensics); this table is for lightweight text/status debugging visibility.
+    """
+
+    __tablename__ = "collector_action_log"
+    __table_args__ = (
+        Index("ix_collector_action_log_item_time", "tracked_item_id", "logged_at"),
+        Index("ix_collector_action_log_logged_at", "logged_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    logged_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+
+    tracked_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tracked_items.id"), nullable=True
+    )
+    item_name: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Expected values: "click_attempt", "click_retry", "click_success", "click_skip_cached",
+    # "click_skip_disabled", "click_skip_429ed", "modal_429ed_set", "modal_429ed_cleared", "error"
+    action: Mapped[str] = mapped_column(String, nullable=False)
+
+    ssi: Mapped[str | None] = mapped_column(String, nullable=True)
+    seller_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    shop_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    message: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class HourlyStat(Base):
@@ -214,6 +249,7 @@ class CollectorStatus(Base):
     next_item_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     consecutive_rate_limits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     location_lookup_warning: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    modal_429ed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     retry_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -262,7 +298,8 @@ class CollectorConfig(Base):
     __tablename__ = "collector_config"
 
     id: Mapped[int] = mapped_column(primary_key=True, default=1)
-    poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    registration_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    price_watch_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     item_delay_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=15.0)
     location_click_delay_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=2.5)
     updated_at: Mapped[datetime] = mapped_column(

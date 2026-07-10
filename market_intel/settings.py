@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "sqlite:///./market_intel.db"
-    poll_interval_seconds: int = 600
+    registration_interval_seconds: int = 600
+    price_watch_interval_seconds: int = 600
     raw_retention_days: int = 30
     server_type: str = "FREYA"
     store_type: str = "BUY"

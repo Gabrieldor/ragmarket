@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sales_inference import SELLOUT_GRACE_WINDOW_POLLS, compute_sale_events
 from settings import settings
 
-GRACE = timedelta(seconds=SELLOUT_GRACE_WINDOW_POLLS * settings.poll_interval_seconds)
+GRACE = timedelta(seconds=SELLOUT_GRACE_WINDOW_POLLS * settings.registration_interval_seconds)
 
 
 def _obs(ssi, observed_at, qty, seller="Bob", map_name="prt_mk.gat", price=100):
