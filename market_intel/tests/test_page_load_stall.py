@@ -62,7 +62,17 @@ class _FakePage:
         return True  # CSS "ready" -- keeps the unrelated CSS-ready-reload path out of these tests
 
 
-def test_page_load_stall_raises_after_retries_exhausted():
+def test_page_load_stall_raises_after_retries_exhausted(monkeypatch):
+    # The raw-HTML fallback (a real httpx GET) would otherwise fire for real right before the
+    # final raise -- force it to fail too, so this test still exercises "nothing recovered
+    # the scrape" without making a live network call.
+    async def _fake_fetch_raw_html(*a, **kw):
+        return None
+
+    monkeypatch.setattr(
+        "scraper_adapter.provider_adapter._fetch_raw_html", _fake_fetch_raw_html
+    )
+
     provider = DetailedListingProvider(headless=True)
     page = _FakePage(cards_appear_on_attempt=None)  # never appears
 
@@ -73,6 +83,40 @@ def test_page_load_stall_raises_after_retries_exhausted():
         asyncio.run(run())
 
     assert page.reload_calls == 2  # 3 attempts total: 2 reloads between them
+
+
+def test_page_load_stall_recovers_via_raw_html_fallback(monkeypatch):
+    # When the live Playwright page never renders, but the raw-HTML fallback GET succeeds
+    # and parses at least one matching listing, _scrape_page should return those listings
+    # instead of raising -- and they must carry dom_index=-1 (no live card to click).
+    async def _fake_fetch_raw_html(*a, **kw):
+        return "<html>fake</html>"
+
+    def _fake_parse_raw_html_listings(html, item_name, page_num):
+        from scraper_adapter.provider_adapter import DetailedListing
+        return [
+            DetailedListing(
+                price=1000, quantity=5, item_id=1, ssi="s1",
+                shop_name="Shop", seller_name="Seller",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "scraper_adapter.provider_adapter._fetch_raw_html", _fake_fetch_raw_html
+    )
+    monkeypatch.setattr(
+        "scraper_adapter.provider_adapter._parse_raw_html_listings", _fake_parse_raw_html_listings
+    )
+
+    provider = DetailedListingProvider(headless=True)
+    page = _FakePage(cards_appear_on_attempt=None)  # never appears
+
+    listings = asyncio.run(
+        provider._scrape_page(page, "Elunium", "BUY", "FREYA", "LOW_PRICE", 1)
+    )
+
+    assert len(listings) == 1
+    assert listings[0].dom_index == -1
 
 
 def test_page_load_stall_recovers_if_cards_appear_on_retry():

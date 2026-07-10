@@ -18,8 +18,10 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from typing import Callable
 
+import httpx
 from playwright.async_api import Page
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -73,6 +75,14 @@ NEW_SHOP_LOCATION_MAX_ATTEMPTS = 3
 # text already visible (server-rendered), but the CSS/JS bundle not finished loading, which
 # leaves card click handlers unattached (see _wait_for_css_ready).
 CSS_READY_TIMEOUT_MS = 5_000
+
+# Shared between the Playwright browser context (scrape_item) and the plain-HTTP raw-HTML
+# fallback (_fetch_raw_html) so the site sees an identical client fingerprint either way.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 async def _wait_for_css_ready(page: Page, timeout_ms: int = CSS_READY_TIMEOUT_MS) -> bool:
@@ -167,6 +177,221 @@ def _base_search_term(name: str) -> str:
         stripped = new_stripped
 
 
+def _build_listing_page_url(
+    item_name: str, store_type: str, server_type: str, sort: str, page_num: int,
+) -> str:
+    """Build the listing-search URL -- shared by the Playwright navigation in `_scrape_page`
+    and the plain-HTTP raw-HTML fallback (`_fetch_raw_html`), so both hit the exact same
+    endpoint/query string."""
+    from urllib.parse import quote
+    from playwright_provider import BASE_URL
+
+    return (
+        f"{BASE_URL}"
+        f"?storeType={quote(store_type)}"
+        f"&serverType={quote(server_type)}"
+        f"&searchWord={quote(_base_search_term(item_name))}"
+        f"&sortType={quote(sort)}"
+        f"&limit=60"
+        f"&p={page_num}"
+    )
+
+
+def _build_listings_from_raw(raw: list[dict], item_name: str, page_num: int) -> list[DetailedListing]:
+    """Turn raw card dicts (shaped like `_DETAILED_EXTRACT_JS`'s output -- name/price/qty/
+    itemId/ssi/shopName/sellerName[/domIndex]) into `DetailedListing`s, applying the exact
+    same skip/parse rules regardless of whether the dicts came from the live DOM (JS
+    extraction) or from parsing raw server-rendered HTML (`_RawHTMLListingParser`). Entries
+    without a `domIndex` key (the raw-HTML path) naturally default to dom_index=-1, which is
+    what keeps location-modal click attempts from being tried against them -- there's no
+    live card to click since the browser page never actually rendered these."""
+    listings: list[DetailedListing] = []
+    skipped = 0
+    for entry in raw:
+        card_name = (entry.get("name") or "").strip()
+        if card_name and card_name.lower() != item_name.lower():
+            skipped += 1
+            continue
+        price = parse_price_text(entry.get("price") or "")
+        qty = parse_price_text(entry.get("qty") or "")
+        if price and price > 0:
+            item_id_raw = entry.get("itemId")
+            listings.append(
+                DetailedListing(
+                    price=price,
+                    quantity=qty or 1,
+                    item_id=int(item_id_raw) if item_id_raw else None,
+                    ssi=entry.get("ssi"),
+                    shop_name=entry.get("shopName"),
+                    seller_name=entry.get("sellerName"),
+                    dom_index=entry.get("domIndex", -1),
+                )
+            )
+
+    if skipped:
+        logger.debug(
+            "Page %d: skipped %d non-matching card(s) for '%s'", page_num, skipped, item_name
+        )
+    return listings
+
+
+_VOID_HTML_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+
+
+class _RawHTMLListingParser(HTMLParser):
+    """Stdlib-only parser that walks raw server-rendered HTML and yields raw card dicts
+    shaped exactly like `_DETAILED_EXTRACT_JS`'s client-side output, so both feed into the
+    same `_build_listings_from_raw` helper. Matches CSS-module classes by substring/prefix
+    (e.g. `"card_item_name" in classes`), mirroring the `[class*="..."]` selectors used
+    client-side -- the hash suffixes on those classes can change per deploy.
+
+    Used only as a last-resort fallback when the live Playwright page never rendered item
+    cards after retries (see `_scrape_page`), so this deliberately favors "don't crash" over
+    strictness: malformed/unexpected HTML just yields fewer (or zero) listings rather than
+    raising.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.listings: list[dict] = []
+        self._card: dict | None = None
+        self._stack: list[dict] = []
+
+    def handle_starttag(self, tag, attrs) -> None:
+        attrs_dict = dict(attrs)
+        if self._card is None:
+            if tag == "li" and "data-id" in attrs_dict:
+                self._card = {
+                    "itemId": attrs_dict.get("data-id"),
+                    "ssi": attrs_dict.get("data-ssi"),
+                    "name": None,
+                    "price": None,
+                    "qty": None,
+                    "shopName": None,
+                    "sellerName": None,
+                    "_detailResults": [],
+                }
+                self._stack = []
+            return
+        if tag in _VOID_HTML_TAGS:
+            return
+        self._stack.append({
+            "tag": tag,
+            "classes": attrs_dict.get("class") or "",
+            "own_text": [],
+            "children": [],
+        })
+
+    def handle_startendtag(self, tag, attrs) -> None:
+        # Self-closed tags (e.g. `<img ... />`); default HTMLParser behavior would call
+        # handle_starttag then handle_endtag anyway, but we're explicit here since our
+        # handle_starttag intentionally no-ops for void tags.
+        self.handle_starttag(tag, attrs)
+        if tag not in _VOID_HTML_TAGS:
+            self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._card is not None and self._stack:
+            self._stack[-1]["own_text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._card is None:
+            return
+        if tag == "li" and not self._stack:
+            # Closes the outer li[data-id] card itself (never pushed onto _stack).
+            self._finish_card()
+            return
+        if not self._stack or self._stack[-1]["tag"] != tag:
+            # Mismatched/unexpected closing tag -- ignore rather than corrupt the stack.
+            return
+
+        frame = self._stack.pop()
+        text = "".join(frame["own_text"]).strip()
+        if self._stack:
+            self._stack[-1]["children"].append({"tag": frame["tag"], "classes": frame["classes"], "text": text})
+        self._capture_frame(frame["tag"], frame["classes"], text, frame["children"])
+
+    def _capture_frame(self, tag: str, classes: str, text: str, children: list[dict]) -> None:
+        card = self._card
+        if card is None:
+            return
+
+        if "card_item_name" in classes and card["name"] is None:
+            card["name"] = text
+
+        if "card_item_price" in classes:
+            span_child = next((c for c in children if c["tag"] == "span"), None)
+            if span_child is not None:
+                card["price"] = span_child["text"]
+
+        if "card_detail_info_result" in classes:
+            card["_detailResults"].append(text)
+
+        if tag == "li" and "card_shop_info__" in classes:
+            spans = [c for c in children if c["tag"] == "span"]
+            if len(spans) >= 2:
+                label, value = spans[0]["text"], spans[1]["text"]
+                # "Nome do Comércio" -- watch for mangled encoding ("rcio"/"Com\xe9rcio").
+                if "rcio" in label:
+                    card["shopName"] = value
+                elif "Vendedor" in label:
+                    card["sellerName"] = value
+
+    def _finish_card(self) -> None:
+        card = self._card
+        self._card = None
+        self._stack = []
+        if card is None:
+            return
+        detail_results = card.pop("_detailResults")
+        card["qty"] = detail_results[1] if len(detail_results) >= 2 else None
+        self.listings.append(card)
+
+
+def _parse_raw_html_listings(html: str, item_name: str, page_num: int) -> list[DetailedListing]:
+    """Parse raw server-rendered HTML (no JS/CSS) into `DetailedListing`s -- the fallback
+    path used when the live Playwright page stalls (see `_scrape_page`)."""
+    parser = _RawHTMLListingParser()
+    try:
+        parser.feed(html)
+    except Exception:
+        logger.warning("Raw-HTML fallback parser failed for '%s' page %d.", item_name, page_num, exc_info=True)
+        return []
+    return _build_listings_from_raw(parser.listings, item_name, page_num)
+
+
+async def _fetch_raw_html(
+    item_name: str, store_type: str, server_type: str, sort: str, page_num: int, timeout: float,
+) -> str | None:
+    """Plain HTTP GET of the same listing-search URL Playwright navigates to, bypassing the
+    browser/JS/CSS entirely -- the site's initial HTML response already contains full
+    listing data server-rendered, so this works as a fallback when the browser page itself
+    fails to ever render (e.g. sustained HTTP 429 throttling breaking the Playwright page).
+    Returns the response body on HTTP 200, or ``None`` (logging a warning) otherwise --
+    never raises, since this is only ever called right before giving up anyway."""
+    url = _build_listing_page_url(item_name, store_type, server_type, sort, page_num)
+    try:
+        async with httpx.AsyncClient(timeout=timeout / 1000) as client:
+            response = await client.get(
+                url,
+                headers={"User-Agent": _BROWSER_USER_AGENT, "Accept-Language": "pt-BR"},
+            )
+    except Exception as exc:
+        logger.warning("Raw-HTML fallback GET failed for '%s' page %d: %s", item_name, page_num, exc)
+        return None
+
+    if response.status_code != 200:
+        logger.warning(
+            "Raw-HTML fallback GET for '%s' page %d returned HTTP %d.",
+            item_name, page_num, response.status_code,
+        )
+        return None
+    return response.text
+
+
 class DetailedListingProvider(PlaywrightProvider):
     """Same lifecycle/navigation as PlaywrightProvider; richer per-card extraction."""
 
@@ -185,18 +410,7 @@ class DetailedListingProvider(PlaywrightProvider):
         sort: str,
         page_num: int,
     ) -> list[DetailedListing]:
-        from urllib.parse import quote
-        from playwright_provider import BASE_URL
-
-        url = (
-            f"{BASE_URL}"
-            f"?storeType={quote(store_type)}"
-            f"&serverType={quote(server_type)}"
-            f"&searchWord={quote(_base_search_term(item_name))}"
-            f"&sortType={quote(sort)}"
-            f"&limit=60"
-            f"&p={page_num}"
-        )
+        url = _build_listing_page_url(item_name, store_type, server_type, sort, page_num)
         logger.debug("Navigating to: %s", url)
 
         for attempt in range(1, 4):
@@ -256,6 +470,25 @@ class DetailedListingProvider(PlaywrightProvider):
                     break
 
                 if content_attempt == content_wait_attempts:
+                    # Last resort before giving up entirely: a plain HTTP GET of the exact
+                    # same URL, bypassing the browser/JS/CSS -- the site's initial HTML
+                    # response is server-rendered and already contains full listing data, so
+                    # this can recover a scrape even when sustained 429 throttling has broken
+                    # the Playwright page itself.
+                    raw_html = await _fetch_raw_html(
+                        item_name, store_type, server_type, sort, page_num, self.timeout,
+                    )
+                    fallback_listings: list[DetailedListing] = []
+                    if raw_html:
+                        fallback_listings = _parse_raw_html_listings(raw_html, item_name, page_num)
+                    if fallback_listings:
+                        logger.warning(
+                            "Page %d for '%s' never rendered via Playwright after %d attempts "
+                            "-- raw-HTML fallback recovered %d listing(s).",
+                            page_num, item_name, content_wait_attempts, len(fallback_listings),
+                        )
+                        return fallback_listings
+
                     raise PageLoadStallError(
                         f"Page {page_num} for '{item_name}' never rendered item cards or the "
                         f"'no results' UI after {content_wait_attempts} attempts -- treating as "
@@ -307,33 +540,7 @@ class DetailedListingProvider(PlaywrightProvider):
             logger.warning("JS evaluation failed on page %d: %s", page_num, exc)
             return []
 
-        listings: list[DetailedListing] = []
-        skipped = 0
-        for entry in raw:
-            card_name = (entry.get("name") or "").strip()
-            if card_name and card_name.lower() != item_name.lower():
-                skipped += 1
-                continue
-            price = parse_price_text(entry.get("price") or "")
-            qty = parse_price_text(entry.get("qty") or "")
-            if price and price > 0:
-                item_id_raw = entry.get("itemId")
-                listings.append(
-                    DetailedListing(
-                        price=price,
-                        quantity=qty or 1,
-                        item_id=int(item_id_raw) if item_id_raw else None,
-                        ssi=entry.get("ssi"),
-                        shop_name=entry.get("shopName"),
-                        seller_name=entry.get("sellerName"),
-                        dom_index=entry.get("domIndex", -1),
-                    )
-                )
-
-        if skipped:
-            logger.debug(
-                "Page %d: skipped %d non-matching card(s) for '%s'", page_num, skipped, item_name
-            )
+        listings = _build_listings_from_raw(raw, item_name, page_num)
         logger.debug("Page %d: %d detailed listing(s) for '%s'", page_num, len(listings), item_name)
         return listings
 
@@ -398,11 +605,7 @@ class DetailedListingProvider(PlaywrightProvider):
             modal_429ed = bool(status.modal_429ed) if status else False
 
         context = await self._browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent=_BROWSER_USER_AGENT,
             locale="pt-BR",
             viewport={"width": 1280, "height": 800},
         )
