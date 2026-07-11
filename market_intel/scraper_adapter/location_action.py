@@ -13,14 +13,18 @@ multiple listings. This is the canonical method; there is no raw-POST
 fallback to maintain.
 """
 
+import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import Page, Error as PlaywrightError
+from sqlalchemy.orm import Session
 
+from db.repository import log_collector_action
 from notifications.rule_parser import REFINE_PREFIX_RE, SLOT_SUFFIX_RE
+from playwright_provider import RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +67,24 @@ def _prune_old_captures() -> None:
                 pass
 
 
+def _has_429_evidence(console_errors: list[str] | None) -> bool:
+    """Detect genuine HTTP 429 rate-limiting inside captured browser console errors,
+    e.g. ``Failed to load resource: the server responded with a status of 429 ()``.
+    Used to distinguish real rate-limiting from ordinary modal-render failures
+    (selector timeouts, evaluate errors) so callers can raise RateLimitError and
+    reach the site-wide backoff instead of silently swallowing the failure.
+    """
+    if not console_errors:
+        return False
+    for err in console_errors:
+        if "429" in err and "Failed to load resource" in err:
+            return True
+    return False
+
+
 async def _capture_failure_diagnostics(
     page: Page, reason: str, item_name: str | None, seller_name: str | None, shop_name: str | None,
+    console_errors: list[str] | None = None,
 ) -> None:
     """Best-effort forensic capture on a modal failure -- screenshot, full HTML, and a
     quick DOM probe (element counts for the selectors we rely on), so a future failure
@@ -83,9 +103,11 @@ async def _capture_failure_diagnostics(
     except Exception:
         pass
 
+    recent_errors = console_errors[-5:] if console_errors else []
     logger.warning(
-        "Modal failure diagnostics [%s]: item=%s seller=%s shop=%s url=%s dom_probe=%s",
-        reason, item_name, seller_name, shop_name, url, probe,
+        "Modal failure diagnostics [%s]: item=%s seller=%s shop=%s url=%s dom_probe=%s "
+        "recent_console_errors=%s",
+        reason, item_name, seller_name, shop_name, url, probe, recent_errors,
     )
 
     try:
@@ -180,6 +202,94 @@ def _parse_coords(coords: str | None) -> tuple[int | None, int | None]:
         return None, None
 
 
+class LocationActionRecipe:
+    """Captured shape of the site's own Next.js Server Action request for resolving a
+    listing's shop location -- url, headers, and a (svrId, mapId) pair pulled from a real
+    click that succeeded this session. ``svrId``/``mapId`` are not listing-specific (only
+    ``ssi`` is), confirmed via live recon: swapping in an unrelated listing's ``ssi`` while
+    keeping another listing's ``svrId``/``mapId`` still returns that listing's correct data.
+    This lets one successful click unlock direct-request lookups for every other listing on
+    the same page, without needing a click (and its CSS/JS-hydration dependency) per listing.
+    """
+
+    def __init__(self, url: str, headers: dict, svr_id: int, map_id: int):
+        self.url = url
+        self.headers = headers
+        self.svr_id = svr_id
+        self.map_id = map_id
+
+
+def build_location_recipe_from_request(req) -> "LocationActionRecipe | None":
+    """Inspect a Playwright ``Request`` and, if it's the site's location Server Action,
+    build a reusable recipe from it. Returns None for any other request."""
+    if req.method != "POST" or not req.headers.get("next-action"):
+        return None
+    try:
+        body = json.loads(req.post_data or "[]")
+        params = body[0]["params"]
+        svr_id, map_id = params["svrId"], params["mapId"]
+    except Exception:
+        return None
+    headers = {k: v for k, v in req.headers.items() if k.lower() not in ("cookie", "content-length", "host")}
+    return LocationActionRecipe(url=req.url, headers=headers, svr_id=svr_id, map_id=map_id)
+
+
+_RSC_LINE_RE = re.compile(r"^\d+:(.*)$")
+
+
+async def fetch_shop_location_via_action(
+    request_context, recipe: LocationActionRecipe, ssi: str,
+) -> ShopLocationDetail | None:
+    """Resolve a listing's location via a direct POST using a previously captured recipe,
+    swapping in this listing's ``ssi`` -- no click, no modal, no CSS/JS dependency. Falls
+    back to None (caller retries via the click-based method) on any failure; never raises.
+    """
+    body = json.dumps([{"type": "store", "params": {"svrId": recipe.svr_id, "mapId": recipe.map_id, "ssi": ssi}}])
+    try:
+        resp = await request_context.post(recipe.url, headers=recipe.headers, data=body)
+    except Exception as exc:
+        logger.debug("Direct location-action POST failed for ssi=%s: %s", ssi, exc)
+        return None
+
+    if resp.status == 429:
+        raise RateLimitError(f"HTTP 429 received for direct location-action POST (ssi={ssi})")
+
+    try:
+        text = await resp.text()
+    except Exception as exc:
+        logger.debug("Failed to read direct location-action POST response body for ssi=%s: %s", ssi, exc)
+        return None
+
+    data = None
+    for line in text.splitlines():
+        m = _RSC_LINE_RE.match(line)
+        if not m:
+            continue
+        try:
+            parsed = json.loads(m.group(1))
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and "data" in parsed and parsed.get("success"):
+            data = parsed["data"]
+            break
+
+    if not data:
+        logger.debug("Direct location-action POST returned no usable data for ssi=%s (status=%s)",
+                      ssi, getattr(resp, "status", None))
+        return None
+
+    try:
+        x_pos = int(data["xpos"]) if data.get("xpos") not in (None, "") else None
+        y_pos = int(data["ypos"]) if data.get("ypos") not in (None, "") else None
+    except (ValueError, TypeError):
+        x_pos = y_pos = None
+
+    return ShopLocationDetail(
+        map_name=data.get("mapName"), x_pos=x_pos, y_pos=y_pos,
+        seller_name=data.get("itemSellerCharName"), server_name=data.get("svrName"),
+    )
+
+
 async def _force_close_any_overlay(page: Page) -> None:
     """Best-effort cleanup after a failed modal interaction.
 
@@ -206,6 +316,8 @@ async def _force_close_any_overlay(page: Page) -> None:
 async def fetch_shop_location(
     page: Page, card_locator, timeout_ms: int = 8_000,
     *, item_name: str | None = None, seller_name: str | None = None, shop_name: str | None = None,
+    console_errors: list[str] | None = None,
+    session: Session | None = None, tracked_item_id: int | None = None,
 ) -> ShopLocationDetail | None:
     """Click a single result card and read its location modal.
 
@@ -243,7 +355,13 @@ async def fetch_shop_location(
                 "Card click triggered page navigation instead of opening modal "
                 "(site frontend change?) -- skipping location lookup"
             )
-            await _capture_failure_diagnostics(page, "navigation", item_name, seller_name, shop_name)
+            if session is not None:
+                log_collector_action(
+                    session, action="error", tracked_item_id=tracked_item_id, item_name=item_name,
+                    seller_name=seller_name, shop_name=shop_name,
+                    message="Card click triggered page navigation instead of opening modal",
+                )
+            await _capture_failure_diagnostics(page, "navigation", item_name, seller_name, shop_name, console_errors)
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             except Exception:
@@ -254,8 +372,19 @@ async def fetch_shop_location(
         raw = await page.evaluate(_EXTRACT_MODAL_JS)
     except Exception as exc:
         logger.warning("Failed to open/read location modal: %s", exc)
-        await _capture_failure_diagnostics(page, "exception", item_name, seller_name, shop_name)
+        if session is not None:
+            log_collector_action(
+                session, action="error", tracked_item_id=tracked_item_id, item_name=item_name,
+                seller_name=seller_name, shop_name=shop_name,
+                message=f"Failed to open/read location modal: {exc}",
+            )
+        await _capture_failure_diagnostics(page, "exception", item_name, seller_name, shop_name, console_errors)
         await _force_close_any_overlay(page)
+        if _has_429_evidence(console_errors):
+            raise RateLimitError(
+                "HTTP 429 evidence found in console errors during modal failure "
+                f"(item={item_name}, seller={seller_name}, shop={shop_name})"
+            ) from exc
         return None
     finally:
         try:
