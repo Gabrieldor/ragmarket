@@ -205,7 +205,7 @@ async def _fetch_verified_listings(
     needs_title = rule.required_refine is not None or rule.required_slot is not None
 
     matched: list[RuleListing] = []
-    for listing, location in detailed:
+    for listing, location, _location_source_override in detailed:
         if not _needs_check(listing):
             # Not a price candidate -- location was never looked up for it.
             continue
@@ -279,7 +279,7 @@ async def _fetch_location_for_notification(
         max_pages=config.max_pages,
     )
 
-    for listing, location in detailed:
+    for listing, location, _location_source_override in detailed:
         if _is_match(listing) and location is not None:
             return location
     return None
