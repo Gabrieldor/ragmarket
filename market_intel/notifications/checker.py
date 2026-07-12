@@ -164,7 +164,7 @@ async def _fetch_verified_listings(
     config: NotificationSettings,
     alias_lookup_ci: dict[str, str],
     excluded_set: set[str],
-) -> list[RuleListing]:
+) -> tuple[list[RuleListing], Optional[int]]:
     """Re-scrape ``rule``'s listings through their shop-location modal to verify the
     actual refine level / slot count and/or map, keeping only listings that satisfy every
     constraint the rule sets. Only called when at least one of required_refine/
@@ -173,30 +173,53 @@ async def _fetch_verified_listings(
     those checks simply no-op.
 
     Requires ``provider.scrape_item()`` (``DetailedListingProvider`` -- carries
-    ``dom_index`` so a matching card can be clicked). Candidates are limited to listings
-    priced at or below the rule's upper variance bound, mirroring the price-threshold
-    selection ``evaluate_rule`` already applies, so verification doesn't have to open every
-    card on the page -- only the ones that could plausibly matter. Throttling between modal
-    clicks is handled inside ``scrape_item`` itself (``location_click_delay_seconds``), same
-    as the tracked-item location lookups.
+    ``dom_index`` so a matching card can be clicked). Card-level listing data has no refine
+    prefix (only the modal's ``item_name_title`` does -- see
+    ``scraper_adapter/location_action.py``'s ``_EXTRACT_MODAL_JS`` comment), so refine/slot
+    can only ever be confirmed via the modal, never from the raw search-result card alone.
+    Verification candidates are therefore limited to listings priced at or below the rule's
+    upper variance bound, mirroring the price-threshold selection ``evaluate_rule`` already
+    applies, so this doesn't have to open every card's modal -- only the ones that could
+    plausibly matter for triggering. Throttling between modal clicks is handled inside
+    ``scrape_item`` itself (``location_click_delay_seconds``), same as the tracked-item
+    location lookups.
+
+    Returns ``(matched, fallback_price)``. ``matched`` is exactly the price-gated,
+    fully-verified list used for trigger/notification logic (unchanged behavior). Because
+    the site sorts by ``LOW_PRICE``, the very first listing scraped is always the market's
+    overall cheapest -- that one listing is *also* always sent through the modal
+    (regardless of whether it clears the price gate), so ``fallback_price`` can report the
+    cheapest refine/slot/map-matching price for UI display even when nothing passed the
+    price gate (``matched`` is empty). This costs at most one extra modal fetch per rule
+    check.
     """
     if not hasattr(provider, "scrape_item"):
         logger.warning(
             "[%s] required_refine/required_slot/required_map/excluded_maps set but "
             "provider has no scrape_item() -- skipping verification.", rule.raw,
         )
-        return []
+        return [], None
 
     _, upper = _bounds(rule.target_price, config.variance_percent)
 
     def _needs_check(listing) -> bool:
         return listing.price <= upper
 
+    first_listing_seen = False
+
+    def _needs_location(listing) -> bool:
+        # First listing overall is always the cheapest (LOW_PRICE sort) -- always verify it
+        # too so a display fallback is available even when it's priced above the gate.
+        nonlocal first_listing_seen
+        is_first = not first_listing_seen
+        first_listing_seen = True
+        return _needs_check(listing) or is_first
+
     detailed = await provider.scrape_item(
         item_name=rule.item_name,
         store_type=config.store_type,
         server_type=config.server_type,
-        needs_location=_needs_check,
+        needs_location=_needs_location,
         sort="LOW_PRICE",
         max_pages=config.max_pages,
     )
@@ -205,21 +228,21 @@ async def _fetch_verified_listings(
     needs_title = rule.required_refine is not None or rule.required_slot is not None
 
     matched: list[RuleListing] = []
+    fallback_price: Optional[int] = None
     for listing, location, _location_source_override in detailed:
-        if not _needs_check(listing):
-            # Not a price candidate -- location was never looked up for it.
-            continue
         if location is None:
-            logger.debug(
-                "[%s] could not verify a candidate listing (no location) -- skipping it.",
-                rule.raw,
-            )
+            if _needs_check(listing):
+                logger.debug(
+                    "[%s] could not verify a candidate listing (no location) -- skipping it.",
+                    rule.raw,
+                )
             continue
         if needs_title and location.item_name_title is None:
-            logger.debug(
-                "[%s] could not verify refine/slot for a candidate listing -- skipping it.",
-                rule.raw,
-            )
+            if _needs_check(listing):
+                logger.debug(
+                    "[%s] could not verify refine/slot for a candidate listing -- skipping it.",
+                    rule.raw,
+                )
             continue
         if needs_title:
             actual_refine, actual_slot = parse_item_name_title(location.item_name_title)
@@ -234,6 +257,17 @@ async def _fetch_verified_listings(
                 continue
         if actual_map is not None and actual_map in canonical_excluded:
             continue
+
+        # Passed every refine/slot/map constraint -- eligible for the display fallback
+        # regardless of price gate.
+        if fallback_price is None or listing.price < fallback_price:
+            fallback_price = listing.price
+
+        if not _needs_check(listing):
+            # Not a price-gated trigger candidate -- keep it out of `matched` (unchanged
+            # trigger/notification behavior), it only feeds `fallback_price` above.
+            continue
+
         matched.append(
             RuleListing(
                 price=listing.price,
@@ -247,7 +281,7 @@ async def _fetch_verified_listings(
             )
         )
 
-    return matched
+    return matched, fallback_price
 
 
 async def _fetch_location_for_notification(
@@ -327,8 +361,9 @@ async def check_watch_rules(
         needs_refine_slot = rule.required_refine is not None or rule.required_slot is not None
         needs_map = rule.required_map is not None or bool(excluded_set)
 
+        fallback_price: Optional[int] = None
         if needs_refine_slot:
-            listings = await _fetch_verified_listings(
+            listings, fallback_price = await _fetch_verified_listings(
                 rule, provider, config, alias_lookup_ci, excluded_set
             )
         elif needs_map:
@@ -336,7 +371,7 @@ async def check_watch_rules(
             if tracked_item is not None:
                 listings = _fetch_map_filtered_listings(rule, session, alias_lookup_ci, excluded_set)
             else:
-                listings = await _fetch_verified_listings(
+                listings, fallback_price = await _fetch_verified_listings(
                     rule, provider, config, alias_lookup_ci, excluded_set
                 )
         else:
@@ -361,7 +396,13 @@ async def check_watch_rules(
             rule, listings, config.variance_percent, config.min_items_below
         )
         best_price = cheapest.price if cheapest else None
-        rule.last_checked_price = best_price
+        # `last_checked_price` is a display-only field (the dashboard's "current price"
+        # column) -- when nothing passed the price gate (best_price is None) but a
+        # refine/slot/map-matching listing was still verified above the gate (only possible
+        # via _fetch_verified_listings's always-check-the-cheapest-listing fallback), show
+        # that instead of leaving the column null. Trigger/notification logic below still
+        # uses `best_price` exclusively, untouched by this fallback.
+        rule.last_checked_price = best_price if best_price is not None else fallback_price
         rule.last_checked_at = datetime.now()
 
         async def _resolve_location() -> ShopLocationDetail | None:
