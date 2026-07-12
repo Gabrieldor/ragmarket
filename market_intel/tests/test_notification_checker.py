@@ -121,7 +121,7 @@ class _FakeNotifier:
 def _config(**overrides) -> NotificationSettings:
     defaults = dict(
         local_sound=True, variance_percent=0.0, min_items_below=0,
-        rule_delay_seconds=0.0, store_type="BUY", server_type="FREYA", max_pages=1,
+        store_type="BUY", server_type="FREYA", max_pages=1,
         user_mention="",
     )
     defaults.update(overrides)

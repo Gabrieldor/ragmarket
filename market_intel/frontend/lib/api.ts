@@ -297,7 +297,6 @@ export type NotificationSettings = {
   local_sound: boolean;
   variance_percent: number;
   min_items_below: number;
-  rule_delay_seconds: number;
   store_type: string;
   server_type: string;
   max_pages: number;
@@ -510,7 +509,6 @@ export const api = {
     local_sound: boolean;
     variance_percent: number;
     min_items_below: number;
-    rule_delay_seconds: number;
     store_type: string;
     server_type: string;
     max_pages: number;

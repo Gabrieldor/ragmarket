@@ -54,7 +54,6 @@ export default function WatcherPage() {
           local_sound: String(s.local_sound),
           variance_percent: String(s.variance_percent),
           min_items_below: String(s.min_items_below),
-          rule_delay_seconds: String(s.rule_delay_seconds),
           store_type: s.store_type,
           server_type: s.server_type,
           max_pages: String(s.max_pages),
@@ -109,7 +108,6 @@ export default function WatcherPage() {
         local_sound: form.local_sound === "true",
         variance_percent: Number(form.variance_percent),
         min_items_below: Number(form.min_items_below),
-        rule_delay_seconds: Number(form.rule_delay_seconds),
         store_type: form.store_type,
         server_type: form.server_type,
         max_pages: Number(form.max_pages),
@@ -281,15 +279,6 @@ export default function WatcherPage() {
                   type="number"
                   value={form.min_items_below || ""}
                   onChange={(e) => setForm((f) => ({ ...f, min_items_below: e.target.value }))}
-                  className="border border-border rounded px-3 py-1.5 text-sm w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Rule delay (s)</label>
-                <input
-                  type="number"
-                  value={form.rule_delay_seconds || ""}
-                  onChange={(e) => setForm((f) => ({ ...f, rule_delay_seconds: e.target.value }))}
                   className="border border-border rounded px-3 py-1.5 text-sm w-full"
                 />
               </div>

@@ -438,7 +438,6 @@ class NotificationSettingsOut(BaseModel):
     local_sound: bool
     variance_percent: float
     min_items_below: int
-    rule_delay_seconds: float
     store_type: str
     server_type: str
     max_pages: int
@@ -453,7 +452,6 @@ class NotificationSettingsUpdate(BaseModel):
     local_sound: bool | None = None
     variance_percent: float | None = None
     min_items_below: int | None = None
-    rule_delay_seconds: float | None = None
     store_type: str | None = None
     server_type: str | None = None
     max_pages: int | None = None

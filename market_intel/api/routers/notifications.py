@@ -39,7 +39,6 @@ def _settings_out(config: NotificationSettings) -> NotificationSettingsOut:
         local_sound=config.local_sound,
         variance_percent=config.variance_percent,
         min_items_below=config.min_items_below,
-        rule_delay_seconds=config.rule_delay_seconds,
         store_type=config.store_type,
         server_type=config.server_type,
         max_pages=config.max_pages,

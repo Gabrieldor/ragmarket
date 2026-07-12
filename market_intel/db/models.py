@@ -438,7 +438,6 @@ class NotificationSettings(Base):
     local_sound: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     variance_percent: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     min_items_below: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    rule_delay_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
     store_type: Mapped[str] = mapped_column(String, nullable=False, default="BUY")
     server_type: Mapped[str] = mapped_column(String, nullable=False, default="FREYA")
     max_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

@@ -28,7 +28,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import NotificationEvent, NotificationSettings, WatchRule
+from db.models import CollectorConfig, NotificationEvent, NotificationSettings, WatchRule
 from db.repository import find_tracked_item_by_name, get_latest_observations, get_map_alias_lookup
 from scraper_adapter.location_action import ShopLocationDetail, parse_item_name_title
 
@@ -294,15 +294,17 @@ async def check_watch_rules(
     only_item_aliases: set[str] | None = None,
     exclude_item_aliases: set[str] | None = None,
 ) -> int:
-    """Checks every active WatchRule sequentially (sleeping ``rule_delay_seconds`` between
-    each, like the original tool's ``rule_delay``), firing notifications on state
-    transitions only -- never re-notifies while a condition holds steady at the same price.
-    Returns the count of notifications fired this call.
+    """Checks every active WatchRule sequentially (sleeping the global collector
+    ``item_delay_seconds`` between each, like the original tool's ``rule_delay``), firing
+    notifications on state transitions only -- never re-notifies while a condition holds
+    steady at the same price. Returns the count of notifications fired this call.
 
     ``only_item_aliases`` / ``exclude_item_aliases`` optionally restrict which rules are
     checked, matched case-insensitively against ``WatchRule.item_name``. At most one of
     these is expected to be passed by any given caller.
     """
+    collector_config = session.get(CollectorConfig, 1)
+    rule_delay_seconds = collector_config.item_delay_seconds if collector_config else 0.0
     rules = list(session.scalars(select(WatchRule).where(WatchRule.is_active.is_(True))))
     if only_item_aliases is not None:
         rules = [r for r in rules if r.item_name.strip().lower() in only_item_aliases]
@@ -313,7 +315,7 @@ async def check_watch_rules(
 
     for index, rule in enumerate(rules):
         if index > 0:
-            await asyncio.sleep(config.rule_delay_seconds)
+            await asyncio.sleep(rule_delay_seconds)
 
         rule_excluded_set = set(rule.excluded_maps.split(",")) if rule.excluded_maps else set()
         global_excluded_set = (
@@ -411,7 +413,7 @@ async def check_watch_rules(
             fired += 1
 
         # Commit per rule, not just flush -- this loop spans multiple slow network scrapes
-        # and rule_delay_seconds sleeps (potentially minutes across several rules). Flushing
+        # and inter-rule sleeps (potentially minutes across several rules). Flushing
         # without committing leaves a write transaction open against the *entire shared*
         # SQLite file for that whole span, blocking every other writer (the API, the
         # tracked-item scrape phase) with "database is locked" until the loop finally
